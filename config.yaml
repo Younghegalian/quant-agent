@@ -1,0 +1,6 @@
+model:
+  input_dim: 10
+  hidden_dim: 64
+  lr: 3e-4
+  gamma: 0.99
+  clip_eps: 0.2
