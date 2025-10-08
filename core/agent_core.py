@@ -124,6 +124,7 @@ class RLAgent:
         return float(loss.item())
 
     # -------- io ----------
+    # TODO: 파일 IO 에러핸들링 처리 필요
     def save(self, path: str):
         torch.save(self.model.state_dict(), path)
         log(f"[Agent] saved: {path}")
