@@ -1,6 +1,35 @@
 model:
-  input_dim: 10
+  input_dim: 1
   hidden_dim: 64
-  lr: 3e-4
+  gru_layers: 1
+  dropout: 0.1
+  attention: true
+  action_dim: 2
+
+ppo:
+  lr: 3.0e-4
   gamma: 0.99
-  clip_eps: 0.2
+  clip_epsilon: 0.2
+  entropy_coef: 0.01
+  value_coef: 0.5
+  batch_size: 32
+  update_epochs: 3
+
+training:
+  device: "cuda"
+  update_interval: 64
+  buffer_maxlen: 10000
+  save_dir: "checkpoints"
+  save_interval_steps: 500
+
+policy:                      # ✅ 실전/시뮬 공통 정책 규칙
+  signal_sell_threshold: 0.10  # usdt 비중 10% 이상이면 SELL 신호로 해석
+
+data:
+  window_15m: 15   # 15분봉 시계열 길이
+  window_1d: 10     # 일봉 시계열 길이
+
+sim:                          # ✅ 오직 시뮬용
+  max_steps: 1000
+  fee: 0.001
+  init_krw: 1000000
