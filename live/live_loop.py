@@ -1,4 +1,6 @@
 import time
+from typing import Callable, Dict, Any
+
 from core.utils import log
 import random
 from core.utils import load_config
@@ -17,17 +19,28 @@ def dummy_get_live_state():
         "current_price": random.uniform(1360, 1375),
     }
 
-def run_live(agent, get_live_state, execute_action, cfg):
+def run_live(
+        agent,
+        get_live_state: Callable[[], Dict[str, Any]],
+        execute_action: Callable[[str, Dict[str, Any]], Dict[str, float]],
+        cfg: Dict[str, Any]
+):
     step = 0
     update_interval = cfg["training"]["update_interval"]
 
     while True:
-        state = get_live_state()
-        action = agent.act(state)
-        metrics = execute_action(action, state)
-        reward = agent.compute_reward(metrics)
+        # ✅ 환경에서 상태 관측, 행동 선택, 행동 실행, 보상 계산, transition 저장
+        try:
+            state = get_live_state()
+            action = agent.act(state)
+            metrics = execute_action(action, state)
+            reward = agent.compute_reward(metrics)
+            agent.store_transition(state, action, reward, None, False)
 
-        agent.store_transition(state, action, reward, None, False)
+        # TODO: 자세한 에러핸들링 필요
+        except Exception as e:
+            log(f"[LIVE] step={step:05d} | Error: {e}")
+            continue
 
         # ✅ 행동 로그 출력
         krw = state.get("krw_balance", 0)
