@@ -34,14 +34,24 @@
 ## 📂 프로젝트 구조
 
 ```text
-agent/                                  
- ├── __init__.py                         
- ├── agent_core.py                       # RLAgent 정의 (act(), learn())
- ├── model.py                            # GRU + Attention + Dual Head 구조
- ├── ppo_core.py                         # PPO 학습 루프 (선택사항)
- ├── state_schema.py                     # 입력 전처리, normalization, feature shaping
- ├── utils.py                            # 로그, 스케줄러, 메트릭 계산 등
- └── config.yaml                         # 하이퍼파라미터 설정 파일
+agent/
+├── config.yaml                     # 공통 설정 (model/ppo/training/policy/data)
+├── run_sim.py                      # 시뮬 학습 엔트리포인트
+├── run_live.py                     # 실전(온라인 RL) 엔트리포인트
+│
+├── core/                           # 💠 에이전트 코어 (시뮬/실전 공통)
+│   ├── agent_core.py               # RLAgent: act()/compute_reward()/learn() + 버퍼 관리
+│   ├── model.py                    # GRU + Attention + Policy(2) / Value(1)
+│   ├── ppo_core.py                 # PPO 클립 손실/엔트로피/값함수 + optimizer
+│   ├── memory.py                   # 간단한 ReplayBuffer(rolling)
+│   └── utils.py                    # log(), load_config(), save_path() 등 유틸
+│
+├── sim/                            # 🧠 시뮬레이션(훈련) 전용
+│   ├── simulator.py                # 과거데이터 기반 가상체결 + 상태/metrics 반환
+│   └── trainer.py                  # 시뮬 학습 루프(Agent↔Simulator 연결)
+│
+└── live/                           # ⚡ 실전 루프(피드/실행은 외부 모듈 주입)
+    └── live_loop.py                # get_live_state/execute_action 주입형 온라인 RL 루프
 ```
 
 > 💡 *시뮬레이터(`env/`)는 별도로 구성 예정. RL 브레인은 환경과 독립적으로 작동*
@@ -72,25 +82,28 @@ agent/
 
 
 ```text
-──────────────────────────────────────────────────────────────────────────────────────
-   15m / 1d / 김프 시계열 입력
-         │
-         ▼
-  GRU Encoders ×3
-         │
-         ▼
-  Attention Pooling
-         │
-         ▼
-  Dense Fusion  ←  계좌 상태 + 현재가
-         │
-         ├─▶ Policy Head : Softmax(2)   # Action logits
-         └─▶ Value Head  : Linear(1)    # State value (V)
-───────────────────────────────────────────────────────────────────────────────────────
+───────────────────────────────────────────────────────────
+Input:
+ ├─ 15m close series  → GRU + Attention Pooling
+ ├─ 1d close series   → GRU + Attention Pooling
+ ├─ 1d Kimchi Premium    → GRU + Attention Pooling
+ ├─ Account State     → Dense Encoding (KRW, USDT)
+ └─ Current Price     → Scalar Input
+
+Fusion:
+ └─ Concat + Dense →
+      ├─ Policy Head → Softmax(2)  (Hold / Trade)
+      └─ Value Head  → Linear(1)
+────────────────────────────────────────────────────────────
 ```
 
-Light temporal encoding × contextual fusion → dual-head decision network.
 
+## Action semantics
+```text
+0: HOLD
+
+1: SIGNAL (→ 계좌 비중에 따라 BUY / SELL로 자동 해석)
+```
 
 ---
 
@@ -98,27 +111,39 @@ Light temporal encoding × contextual fusion → dual-head decision network.
 
 ## 🧩 학습 설정
 
-| 파라미터 | 기본값 | 설명 |
-|-----------|---------|------|
-| γ (discount) | 0.995 | 장기보상 가중치 |
-| λ (GAE) | 0.95 | advantage decay |
-| clip | 0.2 | PPO clipping ratio |
-| lr | 3e-4 | 학습률 |
-| entropy_coef | 0.01 | 탐험도 보상 |
-| value_coef | 0.5 | value loss 가중치 |
-| temperature | 0.1 | 탐험률 조절용 softmax 온도 |
+| Category         | Key                            | Default          | Description                        |
+| ---------------- | ------------------------------ | ---------------- | ---------------------------------- |
+| **Model**        | `model.hidden_dim`             | `128`            | GRU hidden state 크기                |
+|                  | `model.num_layers`             | `1`              | GRU layer 수                        |
+|                  | `model.dropout`                | `0.1`            | GRU dropout 비율                     |
+|                  | `model.attn_dim`               | `64`             | Attention pooling 차원               |
+| **PPO**          | `ppo.clip_ratio`               | `0.2`            | PPO 정책 클리핑 한계                      |
+|                  | `ppo.lr`                       | `3e-4`           | Adam 학습률                           |
+|                  | `ppo.value_coef`               | `0.5`            | Value 손실 가중치                       |
+|                  | `ppo.entropy_coef`             | `0.01`           | 탐험(엔트로피) 보너스 가중치                   |
+| **Training**     | `training.batch_size`          | `64`             | 학습 배치 크기                           |
+|                  | `training.epochs`              | `10`             | 한 에포크당 업데이트 반복 수                   |
+|                  | `training.gamma`               | `0.99`           | 할인율 (reward decay factor)          |
+|                  | `training.update_freq`         | `5`              | 몇 스텝마다 학습할지 (버퍼 길이 기준)             |
+|                  | `training.device`              | `"cuda"`         | 기본 연산 디바이스                         |
+| **Data Window**  | `data.window_15m`              | `20`             | 15분봉 입력 시퀀스 길이                     |
+|                  | `data.window_1d`               | `8`              | 일봉 입력 시퀀스 길이                       |
+| **Policy Logic** | `policy.signal_sell_threshold` | `0.10`           | USDT 잔고 비중이 10% 이상일 경우 SIGNAL=SELL |
+| **Misc**         | `versioning.save_dir`          | `"checkpoints/"` | 체크포인트 저장 경로                        |
+|                  | `versioning.auto_timestamp`    | `true`           | 타임스탬프별 폴더 자동 생성                    |
+
 
 ---
 
 ## 🚀 실행 방법
 
-1. **시뮬레이터와 함께 사용**
+1. **Simulated Training**
    ```python
-    from agent.agent_core import RLAgent
-    agent = RLAgent()
-    state = env.get_state()      # 시뮬레이터가 만든 상태
-    action = agent.act(state)    # RL 정책으로 행동 결정
-    env.step(action)             # 거래 수행
+   python run_sim.py
+   ```
+2. **Live (Online RL)**
+   ```python
+   python run_live.py
    ```
 
 ---

@@ -1,5 +1,5 @@
 from .simulator import Simulator
-from ..core.utils import log, save_path, ts
+from core.utils import log, save_path, ts
 
 class Trainer:
     def __init__(self, agent, cfg, price_15m=None):
