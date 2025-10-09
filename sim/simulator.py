@@ -31,7 +31,7 @@ class Simulator:
         # ===== ② 시뮬레이터 주요 변수 =====
         self.data_15m = self.df_15m["close"].to_numpy(dtype=np.float32)
         self.data_1d  = self.df_1d["close"].to_numpy(dtype=np.float32)
-        self.kp_data  = np.full_like(self.data_15m, 2.0, dtype=np.float32)  # 김치프리미엄 더미
+        self.kp_data  = self.df_1d["kp"].to_numpy(dtype=np.float32)  # 김치프리미엄 더미
 
         # 루프 최대길이 = 15분봉 기준
         self.max_steps = len(self.data_15m)
@@ -74,13 +74,14 @@ class Simulator:
         prev_value = self._portfolio_value()
         price = self._price(self.step_idx)
 
-        # --- 거래 로직 ---
-        if action_str == "BUY" and self.krw > 0:
-            self.usdt = (self.krw / price) * (1 - self.fee)
-            self.krw = 0.0
-        elif action_str == "SELL" and self.usdt > 0:
-            self.krw = (self.usdt * price) * (1 - self.fee)
-            self.usdt = 0.0
+        if action_str == "BUY":
+            qty = self.krw / price
+            self.usdt += qty * (1 - self.fee)
+            self.krw = 0
+        elif action_str == "SELL":
+            krw_gain = self.usdt * price * (1 - self.fee)
+            self.krw += krw_gain
+            self.usdt = 0
         # HOLD는 아무것도 안함
 
         # --- 다음 스텝으로 ---
