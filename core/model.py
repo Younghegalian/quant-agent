@@ -1,3 +1,7 @@
+import datetime
+from dataclasses import dataclass
+from enum import Enum
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -61,3 +65,27 @@ class PolicyNetwork(nn.Module):
             h = out[:, -1, :]  # 마지막 timestep
         z = self.fc(h)
         return self.policy_head(z), self.value_head(z)
+
+
+# --- 데이터 읽어올 모델 ---
+@dataclass
+class Candle:
+    timestamp: datetime
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: float
+
+@dataclass
+class OrderResult:
+    order_id: str
+    status: str       # 'filled', 'partial', 'pending', 'cancelled'
+    filled_amount: float
+    filled_price: float
+    fee: float
+    timestamp: datetime
+
+class OrderSide(Enum):
+    BUY = "bid"
+    SELL = "ask"
