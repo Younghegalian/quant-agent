@@ -8,23 +8,46 @@ from .utils import log, to_device
 
 
 class RLAgent:
-    def __init__(self, config: dict):
+    def __init__(self, config: dict, mode: str = "sim"):
+        """
+        mode: 'sim' or 'live'
+        """
         self.cfg = config
+        self.mode = mode
+
+        # 디바이스 설정
         self.device = torch.device(
             config["training"].get("device", "cuda" if torch.cuda.is_available() else "cpu")
         )
 
+        # 모델 초기화
         self.model = PolicyNetwork(**config["model"]).to(self.device)
-        self.ppo = PPOCore(self.model, **config["ppo"])
 
+        # 학습 파라미터 선택 (mode에 따라 다르게)
+        train_cfg = config["training"][mode]
+        ppo_cfg = config["ppo"].copy()
+        ppo_cfg.update({
+            "lr": train_cfg["lr"],
+            "clip_epsilon": train_cfg["clip_epsilon"],
+            "entropy_coef": train_cfg["entropy_coef"],
+            "value_coef": train_cfg["value_coef"],
+            "update_epochs": train_cfg["update_epochs"],
+        })
+
+        # PPO Core 초기화
+        self.ppo = PPOCore(self.model, **ppo_cfg)
+
+        # 공통 파라미터
         self.gamma = config["ppo"]["gamma"]
-        self.update_interval = config["training"]["update_interval"]
+        self.update_interval = train_cfg["update_interval"]
         self.save_dir = config["training"]["save_dir"]
         os.makedirs(self.save_dir, exist_ok=True)
 
+        # 버퍼 및 상태 초기화
         self.buffer = ReplayBuffer(maxlen=config["training"]["buffer_maxlen"])
         self.global_steps = 0
-        log(f"[Agent] initialized on {self.device}")
+
+        log(f"[Agent] initialized on {self.device} | mode={mode}")
 
     # -------- inference ----------
     def act(self, state: dict) -> str:

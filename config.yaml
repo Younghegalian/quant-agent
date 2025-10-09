@@ -7,33 +7,46 @@ model:
   action_dim: 2
 
 ppo:
-  lr: 3.0e-4
   gamma: 0.99
-  clip_epsilon: 0.2
-  entropy_coef: 0.01
-  value_coef: 0.5
   batch_size: 32
-  update_epochs: 3
 
 training:
   device: "cuda"
-  update_interval: 64
   buffer_maxlen: 10000
   save_dir: "checkpoints"
   save_interval_steps: 500
-  update_freq: 5     # 몇 step마다 학습할지
+
+  # ---- Simulation (훈련) ----
+  sim:
+    lr: 3.0e-4
+    clip_epsilon: 0.2
+    entropy_coef: 0.01
+    value_coef: 0.5
+    update_epochs: 3
+    update_interval: 64
+    update_freq: 5
+
+  # ---- Live (실전) ----
+  live:
+    lr: 1.0e-4
+    clip_epsilon: 0.1
+    entropy_coef: 0.02
+    value_coef: 0.4
+    update_epochs: 1
+    update_interval: 16
+    update_freq: 3
 
 live:
   refresh_interval: 10  # 초당 데이터 업데이트 주기
 
-policy:                      # ✅ 실전/시뮬 공통 정책 규칙
+policy:
   signal_sell_threshold: 0.10  # usdt 비중 10% 이상이면 SELL 신호로 해석
 
 data:
   window_15m: 15   # 15분봉 시계열 길이
-  window_1d: 10     # 일봉 시계열 길이
+  window_1d: 10    # 일봉 시계열 길이
 
-sim:                          # ✅ 오직 시뮬용
+sim:
   max_steps: 1000
   fee: 0.001
   init_krw: 1000000
