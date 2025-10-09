@@ -25,7 +25,7 @@ class RLAgent:
 
         # 학습 파라미터 선택 (mode에 따라 다르게)
         train_cfg = config["training"][mode]
-        ppo_cfg = config["ppo"].copy()
+        ppo_cfg = {}
         ppo_cfg.update({
             "lr": train_cfg["lr"],
             "clip_epsilon": train_cfg["clip_epsilon"],
@@ -47,6 +47,7 @@ class RLAgent:
         self.buffer = ReplayBuffer(maxlen=config["training"]["buffer_maxlen"])
         self.global_steps = 0
 
+        self.eval_mode = False
         log(f"[Agent] initialized on {self.device} | mode={mode}")
 
     # -------- inference ----------
@@ -56,7 +57,12 @@ class RLAgent:
         with torch.no_grad():
             logits, value = self.model(x)
             probs = F.softmax(logits, dim=-1)  # (1,2)
-            action_idx = torch.multinomial(probs, num_samples=1).item()  # 0 or 1
+            if self.eval_mode:
+                # 평가 모드 → 탐험 없이 결정적 행동
+                action_idx = torch.argmax(probs, dim=-1).item()
+            else:
+                # 학습 모드 → 확률 샘플링 (탐험 포함)
+                action_idx = torch.multinomial(probs, num_samples=1).item()
 
         interpreted = "HOLD"
         if action_idx == 1:

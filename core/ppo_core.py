@@ -4,23 +4,15 @@ from torch import optim
 
 
 class PPOCore:
-    def __init__(self, model, cfg):
-        """
-        PPO core module.
-        """
+    def __init__(self, model, lr, clip_epsilon, entropy_coef, value_coef, update_epochs, max_grad_norm=1.0):
         self.model = model
-        ppo_cfg = cfg.get("ppo", {})
-
-        # Hyperparameters from config
-        self.lr            = float(ppo_cfg.get("lr", 3e-4))
-        self.clip_epsilon  = float(ppo_cfg.get("clip_ratio", 0.2))
-        self.entropy_coef  = float(ppo_cfg.get("entropy_coef", 0.01))
-        self.value_coef    = float(ppo_cfg.get("value_coef", 0.5))
-        self.update_epochs = int(ppo_cfg.get("update_epochs", 3))
-        self.max_grad_norm = float(ppo_cfg.get("max_grad_norm", 1.0))
-
-        # Optimizer
-        self.opt = optim.Adam(self.model.parameters(), lr=self.lr)
+        self.lr = lr
+        self.clip_epsilon = clip_epsilon
+        self.entropy_coef = entropy_coef
+        self.value_coef = value_coef
+        self.update_epochs = update_epochs
+        self.max_grad_norm = max_grad_norm
+        self.opt = torch.optim.Adam(self.model.parameters(), lr=self.lr)
 
     # ------------------------------------------------------------
     def compute_loss(self, logits, old_logits, actions, advantages, values, returns):

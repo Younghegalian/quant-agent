@@ -2,10 +2,15 @@ import time, torch
 import yaml
 import os
 
-def load_config(path="config.yaml"):
-    if not os.path.exists(path):
-        raise FileNotFoundError(f"Config file not found: {path}")
-    with open(path, "r", encoding="utf-8") as f:
+def load_config(path=None):
+
+    base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    cfg_path = path or os.path.join(base_dir, "config.yaml")
+
+    if not os.path.exists(cfg_path):
+        raise FileNotFoundError(f"Config file not found: {cfg_path}")
+
+    with open(cfg_path, "r", encoding="utf-8") as f:
         return yaml.safe_load(f)
 
 def log(msg: str):
