@@ -48,5 +48,5 @@ data:
 
 sim:
   max_steps: 1000
-  fee: 0.001
+  fee: 0.0001
   init_krw: 1000000

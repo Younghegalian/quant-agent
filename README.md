@@ -110,26 +110,43 @@ Fusion:
 
 ## 🧩 학습 설정
 
-| Category         | Key                            | Default          | Description                        |
-| ---------------- | ------------------------------ | ---------------- | ---------------------------------- |
-| **Model**        | `model.hidden_dim`             | `128`            | GRU hidden state 크기                |
-|                  | `model.num_layers`             | `1`              | GRU layer 수                        |
-|                  | `model.dropout`                | `0.1`            | GRU dropout 비율                     |
-|                  | `model.attn_dim`               | `64`             | Attention pooling 차원               |
-| **PPO**          | `ppo.clip_ratio`               | `0.2`            | PPO 정책 클리핑 한계                      |
-|                  | `ppo.lr`                       | `3e-4`           | Adam 학습률                           |
-|                  | `ppo.value_coef`               | `0.5`            | Value 손실 가중치                       |
-|                  | `ppo.entropy_coef`             | `0.01`           | 탐험(엔트로피) 보너스 가중치                   |
-| **Training**     | `training.batch_size`          | `64`             | 학습 배치 크기                           |
-|                  | `training.epochs`              | `10`             | 한 에포크당 업데이트 반복 수                   |
-|                  | `training.gamma`               | `0.99`           | 할인율 (reward decay factor)          |
-|                  | `training.update_freq`         | `5`              | 몇 스텝마다 학습할지 (버퍼 길이 기준)             |
-|                  | `training.device`              | `"cuda"`         | 기본 연산 디바이스                         |
-| **Data Window**  | `data.window_15m`              | `20`             | 15분봉 입력 시퀀스 길이                     |
-|                  | `data.window_1d`               | `8`              | 일봉 입력 시퀀스 길이                       |
-| **Policy Logic** | `policy.signal_sell_threshold` | `0.10`           | USDT 잔고 비중이 10% 이상일 경우 SIGNAL=SELL |
-| **Misc**         | `versioning.save_dir`          | `"checkpoints/"` | 체크포인트 저장 경로                        |
-|                  | `versioning.auto_timestamp`    | `true`           | 타임스탬프별 폴더 자동 생성                    |
+| **Category**                 | **Key**                         | **Default / Example** | **Description**                |
+| ---------------------------- | ------------------------------- | --------------------- | ------------------------------ |
+| **Model**                    | `model.hidden_dim`              | `64`                  | GRU hidden state 크기            |
+|                              | `model.gru_layers`              | `1`                   | GRU layer 수                    |
+|                              | `model.dropout`                 | `0.1`                 | Dropout 비율                     |
+|                              | `model.attention`               | `true`                | Attention pooling 사용 여부        |
+|                              | `model.action_dim`              | `2`                   | 행동 차원 (`BUY`, `SELL`)          |
+| **PPO (공통)**                 | `ppo.gamma`                     | `0.99`                | Discount factor (보상 감쇠율)       |
+|                              | `ppo.batch_size`                | `32`                  | 미니배치 크기                        |
+| **Training (공통)**            | `training.device`               | `"cuda"`              | 연산 디바이스 (`cpu`/`cuda`)         |
+|                              | `training.buffer_maxlen`        | `10000`               | 경험 버퍼 최대 크기                    |
+|                              | `training.save_dir`             | `"checkpoints/"`      | 모델 저장 경로                       |
+|                              | `training.save_interval_steps`  | `500`                 | 체크포인트 저장 주기(step 단위)           |
+| **Training – Simulation**    | `training.sim.lr`               | `3e-4`                | 시뮬레이션 학습률                      |
+|                              | `training.sim.clip_epsilon`     | `0.2`                 | PPO 클리핑 한계                     |
+|                              | `training.sim.entropy_coef`     | `0.01`                | 엔트로피(탐험) 가중치                   |
+|                              | `training.sim.value_coef`       | `0.5`                 | Value 손실 가중치                   |
+|                              | `training.sim.update_epochs`    | `3`                   | 학습 반복(epoch) 수                 |
+|                              | `training.sim.update_interval`  | `64`                  | 업데이트 주기 (버퍼 길이 기준)             |
+|                              | `training.sim.update_freq`      | `5`                   | 학습 호출 간격 (step 기준)             |
+| **Training – Live (Online)** | `training.live.lr`              | `1e-4`                | 실전용 학습률                        |
+|                              | `training.live.clip_epsilon`    | `0.1`                 | PPO 클리핑 한계                     |
+|                              | `training.live.entropy_coef`    | `0.02`                | 엔트로피(탐험) 가중치                   |
+|                              | `training.live.value_coef`      | `0.4`                 | Value 손실 가중치                   |
+|                              | `training.live.update_epochs`   | `1`                   | 온라인 업데이트 반복 수                  |
+|                              | `training.live.update_interval` | `16`                  | 업데이트 주기 (버퍼 길이 기준)             |
+|                              | `training.live.update_freq`     | `3`                   | 학습 호출 간격 (step 기준)             |
+| **Live Execution**           | `live.refresh_interval`         | `10`                  | 실시간 데이터 업데이트 간격(초)             |
+| **Policy Logic**             | `policy.signal_sell_threshold`  | `0.10`                | USDT 잔고 비중이 10% 이상이면 `SELL` 신호 |
+| **Data Window**              | `data.window_15m`               | `15`                  | 15분봉 입력 시퀀스 길이                 |
+|                              | `data.window_1d`                | `10`                  | 일봉 입력 시퀀스 길이                   |
+| **Simulation Env**           | `sim.max_steps`                 | `1000`                | 시뮬 최대 step 수                   |
+|                              | `sim.fee`                       | `0.001`               | 거래 수수료 비율                      |
+|                              | `sim.init_krw`                  | `1000000`             | 초기 자본 (KRW)                    |
+| **Versioning**               | `versioning.save_dir`           | `"checkpoints/"`      | 체크포인트 저장 경로                    |
+|                              | `versioning.auto_timestamp`     | `true`                | 타임스탬프별 폴더 자동 생성 여부             |
+
 
 
 ---
