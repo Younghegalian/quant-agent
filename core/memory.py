@@ -16,3 +16,6 @@ class ReplayBuffer:
     def sample(self, n):
         n = min(n, len(self.buf))
         return random.sample(self.buf, n)
+
+    def clear(self):
+        self.buf.clear()

@@ -150,6 +150,8 @@ class RLAgent:
             returns=returns.unsqueeze(-1)         # (B,1)
         )
         self.ppo.step(loss)
+        self.buffer.clear()  # ReplayBuffer가 deque 래핑이면 .clear() 지원
+
         return float(loss.item())
 
     # -------- io ----------
