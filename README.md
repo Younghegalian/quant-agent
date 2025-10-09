@@ -14,11 +14,40 @@
 ---
 
 ### ✳️ 주요 특징
-- **Online RL Architecture:** 시뮬레이션과 실거래 중 모두 학습 가능  
-- **Dual-Timescale Input:** 15분봉 / 일봉 / 김프 시계열 병렬 인코딩  
-- **Attention-Based Fusion:** 시간적 중요도에 따른 동적 가중  
-- **Policy / Value Head 분리:** Softmax(2) + Value(1) 구조  
-- **Lightweight Integration:** 서버 없이 로컬 환경(env)과 직접 연동  
+
+- **🧠 Online PPO Architecture**  
+  시뮬레이션 환경과 실거래 환경을 모두 지원하는 **Online Reinforcement Learning 구조**.  
+  학습된 정책은 실시간 시장 변화에 적응하며, 버퍼에 수집된 경험(transition)을 기반으로  
+  **Proximal Policy Optimization (PPO)** 알고리즘으로 지속적으로 업데이트됨.
+
+- **⏱️ Dual-Timescale Input Encoding**  
+  15분봉(`price_15m`), 일봉(`price_1d`), 김치 프리미엄(`kimchi_premium`) 등  
+  서로 다른 시간 스케일의 시계열 데이터를 병렬 인코딩하여 **단기/중기 시장 구조를 동시에 반영**.  
+  각 시계열은 독립적인 GRU 인코더를 거쳐 latent feature로 변환되며,  
+  이들이 Attention 모듈에서 통합되어 시점별 상대적 중요도를 학습함.
+
+- **🎯 GRU + Attention Fusion**  
+  GRU의 순차적 기억(Long-term dependency)과  
+  Attention의 비선형 중요도 조합을 결합하여  
+  **시장 상태의 시점별 중요도(weighted temporal context)** 를 학습.  
+  단순한 시계열 입력에서도 구조적 feature extraction이 가능함.
+
+- **📊 Feature-Augmented Long-Term Memory**  
+  모델이 모든 과거 데이터를 직접 “기억”하지 않고,  
+  이동평균, 변동성, 모멘텀 등 **통계적 feature 요약값을 state dict에 함께 제공**.  
+  이를 통해 **장기 시장 국면(regime) 정보**를 효율적으로 내재화하고  
+  학습 안정성과 일반화 성능을 향상시킴.
+
+- **🔀 Policy / Value Head Separation**  
+  공통 feature backbone 이후,  
+  정책 확률(Softmax(2))과 상태 가치(Value(1))를 분리 출력하는 **Actor–Critic 구조**.  
+  PPO의 clipping objective + value loss + entropy regularization을 적용해  
+  **탐험(Exploration)** 과 **수렴(Stability)** 의 균형을 유지함.
+
+- **⚡ Lightweight Local Integration**  
+  외부 서버나 API 없이 로컬 환경(`simulator`)과 직접 연동 가능.  
+  동일한 코드 경로에서 시뮬레이션(백테스트)과 실시간 거래 환경을 모두 지원하며,  
+  **Online RL 기반 단타 트레이딩 에이전트**로 확장 가능.
 
 ---
 
@@ -118,7 +147,6 @@ Fusion:
 |                              | `model.attention`               | `true`                | Attention pooling 사용 여부        |
 |                              | `model.action_dim`              | `2`                   | 행동 차원 (`BUY`, `SELL`)          |
 | **PPO (공통)**                 | `ppo.gamma`                     | `0.99`                | Discount factor (보상 감쇠율)       |
-|                              | `ppo.batch_size`                | `32`                  | 미니배치 크기                        |
 | **Training (공통)**            | `training.device`               | `"cuda"`              | 연산 디바이스 (`cpu`/`cuda`)         |
 |                              | `training.buffer_maxlen`        | `10000`               | 경험 버퍼 최대 크기                    |
 |                              | `training.save_dir`             | `"checkpoints/"`      | 모델 저장 경로                       |

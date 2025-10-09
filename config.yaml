@@ -1,14 +1,13 @@
 model:
   input_dim: 1
-  hidden_dim: 64
-  gru_layers: 1
+  hidden_dim: 128
+  gru_layers: 2
   dropout: 0.1
   attention: true
   action_dim: 2
 
 ppo:
   gamma: 0.99
-  batch_size: 32
 
 training:
   device: "cuda"
@@ -37,7 +36,7 @@ training:
     update_freq: 3
 
 live:
-  refresh_interval: 0.05  # 스텝당 슬립 (초)
+  refresh_interval: 0.1  # 스텝당 슬립 (초)
 
 policy:
   signal_sell_threshold: 0.10  # usdt 비중 10% 이상이면 SELL 신호로 해석
