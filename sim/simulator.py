@@ -21,6 +21,12 @@ class Simulator:
             np.cumsum(np.random.randn(self.max_steps).astype(np.float32)) + 1370
         )
 
+        # 아래 더미 데이터 추가 (reset에서 참조하는 변수들 초기화)
+        self.data_15m = self.prices  # 실제에선 별도 데이터 사용
+        self.data_1d = np.array([np.mean(self.prices[max(0, i-96):i+1]) for i in range(len(self.prices))])
+        self.kp_data = np.array([2.0] * len(self.prices))  # 김치 프리미엄 더미
+        self.ptr = win15  # 윈도우 크기만큼 포인터 초기화
+
         self.reset()
 
     def reset(self):
@@ -29,14 +35,8 @@ class Simulator:
         self.usdt = 0.0
         self.value = self.krw
 
-        state = {
-            "price_15m": self.data_15m[self.ptr - win15: self.ptr],
-            "price_1d": self.data_1d[self.ptr - win1d: self.ptr],
-            "kimchi_premium": self.kp_data[self.ptr - win1d: self.ptr],
-            "krw_balance": self.krw,
-            "usdt_balance": self.usdt,
-            "current_price": self.data_15m[self.ptr],
-        }
+        # 포인터를 윈도우 크기만큼 초기화 (데이터 슬라이싱 오류 방지)
+        self.ptr = win15
 
         return self._state()
 
@@ -69,6 +69,7 @@ class Simulator:
         # HOLD는 아무것도 안 함
 
         self.step_idx += 1
+        # 마지막 스텝에서 done 처리 (인덱스 오류 방지)
         done = self.step_idx >= len(self.prices) - 1
         next_state = self._state()
 
