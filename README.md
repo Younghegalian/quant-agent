@@ -81,7 +81,8 @@ agent/
 │
 ├── live/                           # ⚡ 실전 루프(피드/실행은 외부 모듈 주입)
 │   └── live_loop.py                # get_live_state/execute_action 주입형 온라인 RL 루프
-└── io/
+│
+└── io/                             # 에이전트 외부 모듈과 통신 및 거래
     ├── market_data.py              # 시장 캔들, 환율 데이터 수집
     └── trade_engine.py             # 계좌정보, 거래체결
 ```
