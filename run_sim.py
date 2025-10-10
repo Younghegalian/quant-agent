@@ -1,17 +1,43 @@
-import yaml
 import pandas as pd
+from core.utils import load_config
 from core.agent_core import RLAgent
 from sim.trainer import Trainer
 
 if __name__ == "__main__":
     # ===== ① 설정 로드 =====
-    with open("config.yaml", "r", encoding="utf-8") as f:
-        cfg = yaml.safe_load(f)
+    cfg = load_config()
+    win15 = cfg["data"]["window_15m"]
+    win1d = cfg["data"]["window_1d"]
 
     # ===== ② 실데이터 로드 =====
-    # 15분봉 & 일봉 CSV는 사전에 전처리되어 있다고 가정
-    df_15m = pd.read_csv(cfg["data"]["path_15m"], parse_dates=["timestamp"], index_col="timestamp")
-    df_1d  = pd.read_csv(cfg["data"]["path_1d"],  parse_dates=["timestamp"], index_col="timestamp")
+    # 15분봉
+    df_15m = pd.read_csv(
+        "io/USDT_15m_20251010.csv",
+        usecols=["timestamp_kst", "close"],
+        parse_dates=["timestamp_kst"]
+    )
+    df_15m.rename(columns={"timestamp_kst": "timestamp"}, inplace=True)
+    df_15m.set_index("timestamp", inplace=True)
+    df_15m = df_15m[["close"]]
+    df_15m.index = df_15m.index.tz_localize(None)
+
+    # 일봉
+    df_1d = pd.read_csv(
+        "io/USDT_kimchi_days_20251010.csv",
+        usecols=["timestamp_kst", "upbit_usdt_krw", "kimchi_premium(%)"],
+        parse_dates=["timestamp_kst"]
+    )
+    df_1d.rename(
+        columns={
+            "timestamp_kst": "timestamp",
+            "upbit_usdt_krw": "close",
+            "kimchi_premium(%)": "kp"
+        },
+        inplace=True
+    )
+    df_1d.set_index("timestamp", inplace=True)
+    df_1d = df_1d[["close", "kp"]]
+    df_1d.index = df_1d.index.tz_localize(None)
 
     # ===== ③ Agent 생성 =====
     agent = RLAgent(cfg, mode="sim")
@@ -20,12 +46,10 @@ if __name__ == "__main__":
     trainer = Trainer(agent, cfg, price_15m=df_15m, price_1d=df_1d)
 
     # ===== ⑤ 학습 or 평가 =====
-    # eval_mode=False → 학습 + 백테스트
-    # eval_mode=True  → 평가(학습 없음, 행동만)
     agent.eval_mode = False
-    trainer.train(episodes=5, eval_mode=False)
+    trainer.train(episodes=100, eval_mode=False)
 
-    # 만약 학습 후 평가도 하고 싶다면:
-    agent.eval_mode = True
-    agent.load("your_model.pt")
-    trainer.train(episodes=1, eval_mode=True)
+    # ===== ⑥ 학습 후 평가 =====
+    #agent.eval_mode = True
+    #agent.load("your_model.pt")
+    #trainer.train(episodes=1, eval_mode=True)

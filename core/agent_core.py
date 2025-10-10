@@ -1,11 +1,13 @@
 import os
+import time
 import torch
 import torch.nn.functional as F
+import numpy as np
+import math
 from .model import PolicyNetwork
 from .ppo_core import PPOCore
 from .memory import ReplayBuffer, Transition
 from .utils import log, to_device
-
 
 class RLAgent:
     def __init__(self, config: dict, mode: str = "sim"):
@@ -22,6 +24,9 @@ class RLAgent:
 
         # 모델 초기화
         self.model = PolicyNetwork(**config["model"]).to(self.device)
+        self.last_value = None
+        self.save_dir = self.cfg.get("training", {}).get("save_dir", "checkpoints")
+        os.makedirs(self.save_dir, exist_ok=True)
 
         # 학습 파라미터 선택 (mode에 따라 다르게)
         train_cfg = config["training"][mode]
@@ -51,46 +56,155 @@ class RLAgent:
         log(f"[Agent] initialized on {self.device} | mode={mode}")
 
     # -------- inference ----------
-    def act(self, state: dict) -> str:
-        """0=HOLD, 1=SIGNAL → SIGNAL 해석은 여기서 BUY/SELL로 변환"""
-        x = self._preprocess_state(state)  # (1,T,F)
+    def act(self, state: dict) -> dict:
+        """
+        0=HOLD, 1=SIGNAL → SIGNAL 해석은 여기서 BUY/SELL로 변환
+        + 매수는 현재가보다 1원 높게, 매도는 1원 낮게 주문하도록 조정
+        HOLD일 경우 order_price=None 반환
+        반환값: {'action': str, 'order_price': float or None}
+        """
+        # ✅ 세 개 다 받기
+        x_short, x_long, x_acc = self._preprocess_state(state)
+
         with torch.no_grad():
-            logits, value = self.model(x)
-            probs = F.softmax(logits, dim=-1)  # (1,2)
-            if self.eval_mode:
-                # 평가 모드 → 탐험 없이 결정적 행동
-                action_idx = torch.argmax(probs, dim=-1).item()
-            else:
-                # 학습 모드 → 확률 샘플링 (탐험 포함)
-                action_idx = torch.multinomial(probs, num_samples=1).item()
+            logits, value = self.model((x_short, x_long, x_acc))  # ✅ 튜플로 전달
+            probs = F.softmax(logits, dim=-1)
+            action_idx = (torch.argmax if self.eval_mode else torch.multinomial)(probs, 1).item()
 
+        price = float(state.get("current_price", 1.0))
+        krw = float(state.get("krw_balance", 0.0))
+        usdt = float(state.get("usdt_balance", 0.0))
+        total = krw + usdt * price
+        ratio = 0.0 if total <= 0 else (usdt * price) / total
+        th = self.cfg.get("policy", {}).get("signal_sell_threshold", 0.10)
+
+        # ✅ 기본값 (HOLD)
         interpreted = "HOLD"
-        if action_idx == 1:
-            # 계좌 상태 기반 SIGNAL 해석
-            price = state.get("current_price", 1.0)
-            krw = float(state.get("krw_balance", 0.0))
-            usdt = float(state.get("usdt_balance", 0.0))
-            total = krw + usdt * price
-            ratio = 0.0 if total <= 0 else (usdt * price) / total
-            th = self.cfg.get("policy", {}).get("signal_sell_threshold", 0.10)
-            interpreted = "SELL" if ratio >= th and usdt > 0 else ("BUY" if krw > 0 else "HOLD")
+        order_price = None
 
-        return interpreted
+        if action_idx == 1:
+            if ratio >= th and usdt > 0:
+                interpreted = "SELL"
+                order_price = max(price - 1.0, 0.0)  # ✅ 매도는 1원 낮게
+            elif krw > 0:
+                interpreted = "BUY"
+                order_price = price + 1.0  # ✅ 매수는 1원 높게
+
+        return {"action": interpreted, "order_price": order_price}
 
     # -------- reward ----------
-    def compute_reward(self, metrics: dict) -> float:
+    def compute_reward(self, metrics: dict, action=None) -> float:
         """
-        실전/시뮬 공통: env/executor는 raw metrics만 제공.
-        여기서 보상 계산을 정의한다.
-        기본: 자산 변화율을 tanh 스케일링.
+        강화학습용 트레이딩 리워드 함수 (개선 버전)
+        -------------------------------------------------
+        - Entry–Exit 실현수익률 기반 + 거래수수료 반영
+        - HOLD 중 평가손익(unrealized PnL) 소폭 반영
+        - 포지션 유지 시간 감쇠 및 반전 패널티 적용
         """
-        prev_v = metrics.get("value_prev", None)
-        now_v  = metrics.get("value_now", None)
-        if prev_v is None or now_v is None or prev_v <= 0:
-            return 0.0
-        delta = (now_v - prev_v) / prev_v
-        # 안정화
-        return float(torch.tanh(torch.tensor(delta * 5.0)).item())
+
+        # --- 액션 파싱 ---
+        if isinstance(action, dict):
+            action_str = action.get("action", "").upper()
+            order_price = action.get("order_price")
+        elif isinstance(action, (tuple, list)):
+            action_str = str(action[0]).upper()
+            order_price = action[1] if len(action) > 1 else None
+        elif isinstance(action, str):
+            action_str = action.upper()
+            order_price = None
+        else:
+            action_str, order_price = None, None
+
+        # --- 설정값 ---
+        scale = self.cfg.get("policy", {}).get("reward_scale", 5.0)
+        λ = self.cfg.get("policy", {}).get("hold_penalty_lambda", 0.001)
+        fee = self.cfg.get("market", {}).get("fee_rate", 0.0005)
+
+        # --- 내부 상태 초기화 ---
+        if not hasattr(self, "position_open"):
+            self.position_open = False
+        if not hasattr(self, "entry_price"):
+            self.entry_price = None
+        if not hasattr(self, "hold_count"):
+            self.hold_count = 0
+        if not hasattr(self, "prev_action"):
+            self.prev_action = None
+
+        # --- 현재 시장가격 ---
+        price = float(metrics.get("price", 0.0))
+        reward = 0.0
+
+        # =====================
+        #  BUY (진입)
+        # =====================
+        if action_str == "BUY" and not self.position_open:
+            self.position_open = True
+            self.entry_price = order_price or price
+            self.hold_count = 0
+            reward = 0.0
+
+        # =====================
+        #  SELL (청산)
+        # =====================
+        elif action_str == "SELL" and self.position_open:
+            exit_price = order_price or price
+
+            # 수수료 반영 실현 손익률
+            profit_ratio = ((exit_price * (1 - fee)) - (self.entry_price * (1 + fee))) / max(self.entry_price, 1e-8)
+
+            # Tanh 스케일링 + global scale
+            reward = torch.tanh(torch.tensor(profit_ratio * 10.0)).item() * scale
+
+            # 포지션 종료
+            self.position_open = False
+            self.entry_price = None
+            self.hold_count = 0
+
+        # =====================
+        #  HOLD (포지션 유지)
+        # =====================
+        elif action_str == "HOLD" and self.position_open:
+            self.hold_count += 1
+
+            # 평가손익 기반 부분 리워드 (unrealized)
+            unrealized_ratio = (price - self.entry_price) / max(self.entry_price, 1e-8)
+            reward = 0.1 * torch.tanh(torch.tensor(unrealized_ratio * 5.0)).item() * scale
+
+            # 포지션 유지 감쇠 (시간 패널티)
+            decay = min(λ * self.hold_count, 0.2)
+            reward -= decay
+
+        # =====================
+        #  HOLD (비포지션 상태)
+        # =====================
+        elif action_str == "HOLD" and not self.position_open:
+            self.hold_count += 1
+            decay = min(λ * self.hold_count, 0.02)
+            reward = -decay
+
+        # =====================
+        #  잘못된 중복 진입/청산 (BUY인데 이미 open, SELL인데 close)
+        # =====================
+        elif (action_str == "BUY" and self.position_open) or (action_str == "SELL" and not self.position_open):
+            reward = -0.001  # 경미한 패널티
+
+        # =====================
+        #  반전 패널티
+        # =====================
+        if (
+                self.prev_action == "BUY" and action_str == "SELL"
+        ) or (
+                self.prev_action == "SELL" and action_str == "BUY"
+        ):
+            reward -= 0.05 # 포지션 반전 시 약한 패널티 (과도한 flip 방지)
+
+        # --- 상태 업데이트 ---
+        self.prev_action = action_str
+
+        # --- Reward clipping ---
+        reward = np.clip(reward, -scale, scale)
+
+        return float(reward)
 
     # -------- experience ----------
     def store_transition(self, state, action_str, reward, next_state, done, aux=None):
@@ -106,80 +220,138 @@ class RLAgent:
             return None
 
         batch = self.buffer.sample(self.update_interval)
-        # (간소화) 행동을 index로 매핑: HOLD=0, BUY=1, SELL=1 (signal은 어차피 1로 학습)
-        # → 정책은 "signal 낼 타이밍"만 학습, 해석은 act()에서 계좌 상태로 분기.
-        states, actions_idx, rewards, dones, old_logits, values = [], [], [], [], [], []
+        states_s, states_l, states_acc = [], [], []
+        actions_idx, rewards, dones = [], [], []
 
+        # 1) 배치 전처리 (한 번에 스택 → 한 번에 forward)
         with torch.no_grad():
             for tr in batch:
-                x = self._preprocess_state(tr.state)  # (1,T,F)
-                logits, val = self.model(x)
-                old_logits.append(logits.squeeze(0))  # (2,)
-                values.append(val.squeeze(0))         # (1,)
+                xs, xl, acc = self._preprocess_state(tr.state)  # ✅ 세 개 다 언팩
+                states_s.append(xs.squeeze(0))
+                states_l.append(xl.squeeze(0))
+                states_acc.append(acc.squeeze(0))
                 actions_idx.append(0 if tr.action == "HOLD" else 1)
                 rewards.append([tr.reward])
                 dones.append([1.0 if tr.done else 0.0])
-                states.append(x.squeeze(0))
 
-        states  = torch.stack(states).to(self.device)            # (B,T,F)
+        # 2) 텐서 스택
+        states_s = torch.stack(states_s).to(self.device)  # (B, Ts, Fs)
+        states_l = torch.stack(states_l).to(self.device)  # (B, Tl, Fl)
+        states_acc = torch.stack(states_acc).to(self.device)  # (B, 2)
         actions = torch.tensor(actions_idx, dtype=torch.long, device=self.device).unsqueeze(-1)  # (B,1)
-        rewards = torch.tensor(rewards, dtype=torch.float32, device=self.device)                 # (B,1)
-        dones   = torch.tensor(dones, dtype=torch.float32, device=self.device)                   # (B,1)
-        old_logits = torch.stack(old_logits).to(self.device)      # (B,2)
-        values     = torch.stack(values).to(self.device)          # (B,1)
+        rewards = torch.tensor(rewards, dtype=torch.float32, device=self.device)  # (B,1)
+        dones = torch.tensor(dones, dtype=torch.float32, device=self.device)  # (B,1)
 
-        # returns & advantages
+        # 3) old logits/values (첫 pass)
+        with torch.no_grad():
+            old_logits, values = self.model((states_s, states_l, states_acc))
+
+        # 4) returns & advantages 계산
         returns = []
         G = torch.zeros(1, device=self.device)
         for r, d in zip(reversed(rewards), reversed(dones)):
             G = r + self.gamma * G * (1 - d)
             returns.insert(0, G)
-        returns = torch.stack(returns).squeeze(1).detach()  # (B,1) -> (B,)
+        returns = torch.stack(returns).squeeze(1).detach()  # (B,)
         advantages = (returns - values.squeeze(1)).detach()
         advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
 
-        # new forward
-        logits, new_values = self.model(states)  # (B,2), (B,1)
+        # 5) new forward
+        logits, new_values = self.model((states_s, states_l, states_acc))  # ✅ acc 추가 반영
 
+        # 6) PPO loss 계산 및 업데이트
         loss = self.ppo.compute_loss(
             logits=logits,
             old_logits=old_logits,
             actions=actions,
             advantages=advantages.unsqueeze(-1),  # (B,1)
             values=new_values,
-            returns=returns.unsqueeze(-1)         # (B,1)
+            returns=returns.unsqueeze(-1)  # (B,1)
         )
+
         self.ppo.step(loss)
-        self.buffer.clear()  # ReplayBuffer가 deque 래핑이면 .clear() 지원
+        self.buffer.clear()
 
         return float(loss.item())
 
-    # -------- io ----------
-    # TODO: 파일 IO 에러핸들링 처리 필요
-    def save(self, path: str):
-        torch.save(self.model.state_dict(), path)
-        log(f"[Agent] saved: {path}")
+        # -------- utils ----------
 
-    def load(self, path: str):
-        state = torch.load(path, map_location=self.device)
-        self.model.load_state_dict(state)
-        self.model.to(self.device)
-        log(f"[Agent] loaded: {path}")
+    def _preprocess_state(self, state: dict):
 
-    # -------- utils ----------
-    def _preprocess_state(self, state: dict) -> torch.Tensor:
+        # --- Short: price_15m ---
+        s = np.array(state.get("price_15m", []), dtype=np.float32)
+        if s.ndim == 1: s = s[:, None]
+        if s.size > 0:
+            s = (s - s.mean(axis=0, keepdims=True)) / (s.std(axis=0, keepdims=True) + 1e-8)
+        xs = torch.tensor(s, dtype=torch.float32).unsqueeze(0)
+
+        # --- Long: price_1d + kimchi_premium ---
+        p1d = np.array(state.get("price_1d", []), dtype=np.float32)
+        kp = np.array(state.get("kimchi_premium", []), dtype=np.float32)
+        L = min(len(p1d), len(kp))
+        xl_np = np.column_stack([p1d[:L], kp[:L]]) if L > 0 else np.zeros((0, 2), np.float32)
+        if xl_np.size > 0:
+            xl_np = (xl_np - xl_np.mean(axis=0, keepdims=True)) / (xl_np.std(axis=0, keepdims=True) + 1e-8)
+        xl = torch.tensor(xl_np, dtype=torch.float32).unsqueeze(0)
+
+
+        # --- Account: ratio + current_price ---
+        price = float(state.get("current_price", 0.0))
+
+        if hasattr(self, "position_open") and self.position_open and hasattr(self, "entry_price") and self.entry_price:
+            pnl_ratio = (price - self.entry_price) / max(self.entry_price, 1e-8)
+        else:
+            pnl_ratio = 0.0
+        pnl_norm = np.clip(pnl_ratio * 100.0, -5.0, 5.0) / 5.0
+        state["pnl_ratio"] = pnl_norm
+
+        krw = float(state.get("krw_balance", 0.0))
+        usdt = float(state.get("usdt_balance", 0.0))
+        total = krw + usdt * price
+        ratio = 0.0 if total <= 0 else (usdt * price) / total
+        pnl_ratio = float(state.get("pnl_ratio", 0.0))
+        acc_vec = np.array([ratio, price, pnl_ratio], dtype=np.float32)[None, :]  # (1,3)
+        acc = torch.tensor(acc_vec, dtype=torch.float32)
+
+
+
+        return to_device(xs, self.device), to_device(xl, self.device), to_device(acc, self.device)
+
+    def save(self, path: str = None):
         """
-        최소 전처리: (1,T,F)로 맞춘다. 여기선 예시로 close만 1채널로 사용.
-        실전에선 adapter에서 state dict을 바로 (T,F)로 만들어 주면 됨.
+        모델과 PPO optimizer 상태를 저장.
+        path를 생략하면 config에 맞춰 자동 경로로 저장.
         """
-        import numpy as np
-        # 예: state["price_15m"] 시퀀스 사용
-        seq = state.get("price_15m", [])
-        arr = np.array(seq, dtype=np.float32)
-        if arr.ndim == 1:
-            arr = arr[:, None]  # (T,1)
-        # 표준화(옵션)
-        if arr.size > 1:
-            arr = (arr - arr.mean()) / (arr.std() + 1e-8)
-        x = torch.tensor(arr, dtype=torch.float32).unsqueeze(0)  # (1,T,F)
-        return to_device(x, self.device)
+        if path is None:
+            prefix = self.cfg.get("live", {}).get("save_prefix", "live_model")
+            ts = int(time.time())
+            path = os.path.join(self.save_dir, f"{prefix}_{ts}.pth")
+
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        torch.save(
+            {
+                "model_state_dict": self.model.state_dict(),
+                "optimizer_state_dict": (
+                    self.ppo.optimizer.state_dict() if hasattr(self, "ppo") else None
+                ),
+                "config": self.cfg,
+            },
+            path,
+        )
+        return path  # 저장 경로 반환
+
+    def load(self, path: str, strict: bool = True):
+        """저장된 체크포인트를 복원."""
+        ckpt = torch.load(path, map_location=self.device)
+        self.model.load_state_dict(ckpt["model_state_dict"], strict=strict)
+
+        opt_state = ckpt.get("optimizer_state_dict")
+        if opt_state and hasattr(self, "ppo") and hasattr(self.ppo, "optimizer"):
+            self.ppo.optimizer.load_state_dict(opt_state)
+
+        # 저장 당시 config 반영(선택)
+        self.cfg = ckpt.get("config", self.cfg)
+        # 저장 디렉토리 동기화
+        self.save_dir = self.cfg.get("training", {}).get("save_dir", self.save_dir)
+        os.makedirs(self.save_dir, exist_ok=True)
+        return path

@@ -12,7 +12,8 @@ class PPOCore:
         self.value_coef = value_coef
         self.update_epochs = update_epochs
         self.max_grad_norm = max_grad_norm
-        self.opt = torch.optim.Adam(self.model.parameters(), lr=self.lr)
+        self.opt = optim.Adam(self.model.parameters(), lr=self.lr)
+        self.optimizer = self.opt
 
     # ------------------------------------------------------------
     def compute_loss(self, logits, old_logits, actions, advantages, values, returns):
@@ -22,6 +23,9 @@ class PPOCore:
         actions: (B,1)
         advantages, values, returns: (B,1)
         """
+        logits = torch.clamp(logits, -20, 20)
+        old_logits = torch.clamp(old_logits, -20, 20)
+
         # Log prob 계산
         new_logp = F.log_softmax(logits, dim=-1)
         old_logp = F.log_softmax(old_logits, dim=-1).detach()
@@ -45,7 +49,11 @@ class PPOCore:
         entropy = -(probs * new_logp).sum(dim=1).mean()
 
         # total loss
-        loss = policy_loss + self.value_coef * value_loss - self.entropy_coef * entropy
+        probs_new = F.softmax(logits, dim=-1)
+        probs_old = F.softmax(old_logits, dim=-1)
+        kl = (probs_old * (torch.log(probs_old + 1e-8) - torch.log(probs_new + 1e-8))).sum(dim=1).mean()
+        loss = policy_loss + self.value_coef * value_loss - self.entropy_coef * entropy + 0.5 * kl
+
         return loss
 
     # ------------------------------------------------------------

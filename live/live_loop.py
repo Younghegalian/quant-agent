@@ -1,5 +1,7 @@
+from datetime import datetime
 import time
 import random
+import os
 from typing import Callable, Dict, Any
 from core.utils import log, load_config
 
@@ -19,21 +21,25 @@ def dummy_get_live_state() -> Dict[str, Any]:
         "current_price": random.uniform(1360, 1375),
     }
 
-def dummy_execute_action(action_str: str, state: Dict[str, Any]) -> Dict[str, float]:
+def dummy_execute_action(action_str: str, state: Dict[str, Any], order_price: float = None) -> Dict[str, float]:
     """
-    실전에서는 거래소 API 체결 결과를 사용.
-    여기서는 평가액이 약간 흔들린다고 가정한 더미 metrics만 반환.
+    실전에서는 거래소 API 체결 결과를 반환.
+    order_price: agent.act()에서 지정한 주문가격 (+1/-1 보정 반영)
     """
-    price = float(state.get("current_price", 0.0))
-    v_prev = float(state.get("krw_balance", 0.0) + state.get("usdt_balance", 0.0) * price)
-    drift = random.uniform(-300, 300)
-    v_now = v_prev + drift
-    return {"value_prev": v_prev, "value_now": v_now, "price": price}
+    if order_price is None:
+        order_price = state.get("current_price", 0.0)
+
+    # 가상 체결 로직
+    price = float(order_price)
+    fee = random.uniform(0.0004, 0.0006)
+    filled = True
+    return {"price": price, "fee": fee, "filled": filled}
+
 
 def run_live(
     agent,
     get_live_state: Callable[[], Dict[str, Any]],
-    execute_action: Callable[[str, Dict[str, Any]], Dict[str, float]],
+    execute_action: Callable[[str, Dict[str, Any], float], Dict[str, float]],
     cfg: Dict[str, Any],
 ):
     """
@@ -43,45 +49,73 @@ def run_live(
     update_interval = cfg["training"].get("update_interval", 64)
     sleep_sec = cfg.get("live", {}).get("refresh_interval", 5)
 
+    save_every = cfg.get("live", {}).get("save_interval_updates", 0)
+    save_prefix = cfg.get("live", {}).get("save_prefix", "live_model")
+    update_count = 0
+
     log("[LIVE] Online RL Loop start")
+
     while True:
         try:
-            # 1) 상태 수집 → 2) 행동 결정
+            # 1) 상태 수집
             state = get_live_state()
-            action_str = agent.act(state)  # "HOLD" / "SIGNAL" 또는 최종 "BUY"/"SELL"/"HOLD"
+
+            # 2) 행동 결정 (가격 포함)
+            act_out = agent.act(state)  # {"action": "BUY"/"SELL"/"HOLD", "order_price": float}
+            action_str = act_out["action"]
+            order_price = act_out["order_price"]
 
             # 3) 행동 집행(체결) → metrics 획득
-            metrics = execute_action(action_str, state)
+            metrics = execute_action(action_str, state, order_price=order_price)
 
-            # 4) 보상 계산(항상 Agent 내부)
-            reward = agent.compute_reward(metrics)
+            time.sleep(sleep_sec)
 
-            # 5) 버퍼 저장 (실전에서는 next_state=None로 둬도 무방)
+            # 4) 자산 상태 반영
+            price = float(state.get("current_price", 0.0))
+            krw = float(state.get("krw_balance", 0.0))
+            usdt = float(state.get("usdt_balance", 0.0))
+            metrics["krw_balance"] = krw
+            metrics["usdt_balance"] = usdt
+            metrics["price"] = price
+
+            # 5) 보상 계산
+            reward = agent.compute_reward(metrics, action_str)
+
+            # 6) 버퍼 저장
             agent.store_transition(state, action_str, reward, None, False)
 
-            # 6) 행동/상태 로그
-            krw = state.get("krw_balance", 0.0)
-            usdt = state.get("usdt_balance", 0.0)
-            price = state.get("current_price", 0.0)
-            val_now = metrics.get("value_now", 0.0)
+            # 7) 로그 출력
+            val_now = krw + usdt * price
+            order_str = f"{order_price:.2f}" if order_price is not None else "None"
+            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
             log(
-                f"[LIVE] step={step:05d} | "
-                f"action={action_str} | price={price:.2f} | "
+                f"[{now_str}] [LIVE] step={step:05d} | "
+                f"action={action_str} | order_price={order_str} | "
+                f"market_price={price:.2f} | "
                 f"KRW={krw:.0f} | USDT={usdt:.4f} | "
                 f"value={val_now:.2f} | reward={reward:.6f}"
             )
 
-            # 7) 일정 step마다 학습
-            if len(getattr(agent, "buffer", [])) >= update_interval:
+            # 8) 일정 step마다 PPO 학습
+            if agent.ready_to_learn():
                 loss = agent.learn()
                 if loss is not None:
-                    log(f"[LIVE] step={step:05d} | PPO update | loss={loss:.6f}")
+                    update_count += 1
+                    log(f"[{now_str}] [LIVE] step={step:05d} | PPO update #{update_count} | loss={loss:.6f}")
+
+                    # ✅ 주기적 모델 저장
+                    if save_every > 0 and update_count % save_every == 0:
+                        save_path = os.path.join(
+                            agent.save_dir, f"{save_prefix}_upd{update_count:04d}.pth"
+                        )
+                        agent.save(save_path)
+                        log(f"[{now_str}] [LIVE] model checkpoint saved → {save_path}")
 
             step += 1
-            time.sleep(sleep_sec)
 
         except Exception as e:
-            log(f"[LIVE] step={step:05d} | ERROR: {e}")
+            now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            log(f"[{now_str}] [LIVE] step={step:05d} | ERROR: {e}")
             time.sleep(2)
             continue

@@ -37,55 +37,66 @@ class MultiHeadAttentionPooling(nn.Module):
 
 # --- Policy Network (개선형) ---
 class PolicyNetwork(nn.Module):
-    def __init__(self, input_dim=1, hidden_dim=128, gru_layers=2, dropout=0.1,
-                 attention=True, action_dim=2, num_heads=2):
+    def __init__(
+        self,
+        input_dim=1, hidden_dim=128, gru_layers=2, dropout=0.1,
+        attention=True, action_dim=2, num_heads=2,
+        dual_timescale=True,
+        short_input_dim=1,
+        long_input_dim=2,
+        account_dim=3   # ratio + current_price + PNL
+    ):
         super().__init__()
-        self.gru = nn.GRU(
-            input_size=input_dim,
+        self.dual = dual_timescale
+        self.attn_on = attention
+        self.hidden_dim = hidden_dim
+
+        # --- short-term (15 min) ---
+        self.gru_s = nn.GRU(
+            input_size=short_input_dim,
             hidden_size=hidden_dim,
             num_layers=gru_layers,
             batch_first=True,
             dropout=dropout if gru_layers > 1 else 0.0
         )
-        self.attn = MultiHeadAttentionPooling(hidden_dim, num_heads) if attention else None
+        self.attn_s = MultiHeadAttentionPooling(hidden_dim, num_heads) if attention else None
 
-        self.fc = nn.Sequential(
-            nn.Linear(hidden_dim, hidden_dim),
+        # --- long-term (1 day + kimchi) ---
+        self.gru_l = nn.GRU(
+            input_size=long_input_dim,
+            hidden_size=hidden_dim,
+            num_layers=gru_layers,
+            batch_first=True,
+            dropout=dropout if gru_layers > 1 else 0.0
+        )
+        self.attn_l = MultiHeadAttentionPooling(hidden_dim, num_heads) if attention else None
+
+        # --- fuse ---
+        self.fuse = nn.Sequential(
+            nn.Linear(hidden_dim * 2 + account_dim, hidden_dim),
             nn.ReLU(),
             nn.Dropout(dropout)
         )
         self.policy_head = nn.Linear(hidden_dim, action_dim)
         self.value_head  = nn.Linear(hidden_dim, 1)
 
-    def forward(self, x):  # x: (B,T,F)
-        out, _ = self.gru(x)  # (B,T,H)
-        if self.attn:
-            h = self.attn(out)
-        else:
-            h = out[:, -1, :]  # 마지막 timestep
-        z = self.fc(h)
+        torch.nn.init.orthogonal_(self.policy_head.weight, gain=0.01)
+        torch.nn.init.constant_(self.policy_head.bias, 0.0)
+        torch.nn.init.orthogonal_(self.value_head.weight, gain=0.01)
+        torch.nn.init.constant_(self.value_head.bias, 0.0)
+
+    def forward(self, x):
+        """x = (x_short, x_long, x_acc)"""
+        x_s, x_l, x_acc = x
+        out_s, _ = self.gru_s(x_s)
+        out_l, _ = self.gru_l(x_l)
+
+        h_s = self.attn_s(out_s) if self.attn_s else out_s[:, -1, :]
+        h_l = self.attn_l(out_l) if self.attn_l else out_l[:, -1, :]
+
+        # 계좌상태(acc)는 (B,2) 형태니까 바로 concat
+        h = torch.cat([h_s, h_l, x_acc], dim=-1)
+        z = self.fuse(h)
+        z = torch.tanh(z)
+
         return self.policy_head(z), self.value_head(z)
-
-
-# --- 데이터 읽어올 모델 ---
-@dataclass
-class Candle:
-    timestamp: datetime
-    open: float
-    high: float
-    low: float
-    close: float
-    volume: float
-
-@dataclass
-class OrderResult:
-    order_id: str
-    status: str       # 'filled', 'partial', 'pending', 'cancelled'
-    filled_amount: float
-    filled_price: float
-    fee: float
-    timestamp: datetime
-
-class OrderSide(Enum):
-    BUY = "bid"
-    SELL = "ask"

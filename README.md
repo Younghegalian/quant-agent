@@ -79,8 +79,11 @@ agent/
 │   ├── simulator.py                # 과거데이터 기반 가상체결 + 상태/metrics 반환
 │   └── trainer.py                  # 시뮬 학습 루프(Agent↔Simulator 연결)
 │
-└── live/                           # ⚡ 실전 루프(피드/실행은 외부 모듈 주입)
-    └── live_loop.py                # get_live_state/execute_action 주입형 온라인 RL 루프
+├── live/                           # ⚡ 실전 루프(피드/실행은 외부 모듈 주입)
+│   └── live_loop.py                # get_live_state/execute_action 주입형 온라인 RL 루프
+└── io/
+    ├── market_data.py              # 시장 캔들, 환율 데이터 수집
+    └── trade_engine.py             # 계좌정보, 거래체결
 ```
 
 
