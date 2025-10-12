@@ -47,7 +47,7 @@ if __name__ == "__main__":
 
     # ===== ⑤ 학습 or 평가 =====
     agent.eval_mode = False
-    trainer.train(episodes=20, eval_mode=False)
+    trainer.train(episodes=100, eval_mode=False)
 
     # ===== ⑥ 학습 후 평가 =====
     #agent.eval_mode = True

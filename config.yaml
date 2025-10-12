@@ -22,7 +22,7 @@ training:
     clip_epsilon: 0.2
     entropy_coef: 0.05
     value_coef: 0.5
-    update_epochs: 3
+    update_epochs: 5
     update_interval: 4096       # rollout
 
   # ---- Live (실전) ----
@@ -31,7 +31,7 @@ training:
     clip_epsilon: 0.1
     entropy_coef: 0.01
     value_coef: 0.4
-    update_epochs: 1
+    update_epochs: 3
     update_interval: 2048       # rollout
 
 live:
