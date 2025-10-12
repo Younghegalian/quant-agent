@@ -348,7 +348,7 @@ async def fetch_kimchi_daily(mode="agent", lookback=200, save_csv=False):
     # ✅ 불필요한 중간 컬럼 정리
     merged = merged.drop(columns=[
         "binance_timestamp_utc", "binance_date",
-        "usdt_timestamp_utc", "usdt_timestamp_kst", "usdt_date"
+        "usdt_timestamp_utc", "usdt_timestamp_kst", "usdt_date", "date"
     ], errors="ignore")
 
     if save_csv:
