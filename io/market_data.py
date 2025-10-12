@@ -142,8 +142,9 @@ async def fetch_usdkrw_timeseries(start_date, end_date):
         url_krw = f"https://api.nbp.pl/api/exchangerates/rates/A/KRW/{s}/{e}/?format=json"
         async with sess.get(url_usd) as r_usd, sess.get(url_krw) as r_krw:
             if r_usd.status != 200 or r_krw.status != 200:
+                # ✅ 주말 구간이면 직전 평일 환율로 채우기
                 print(f"⚠️ NBP 구간 실패 {s}~{e}: USD {r_usd.status}, KRW {r_krw.status}")
-                return None
+                return "WEEKEND_FILL"
             usd_data = await r_usd.json(content_type=None)
             krw_data = await r_krw.json(content_type=None)
         if "rates" not in usd_data or "rates" not in krw_data:
@@ -171,6 +172,7 @@ async def fetch_usdkrw_timeseries(start_date, end_date):
     end_dt = pd.to_datetime(end_date).date()
 
     async with aiohttp.ClientSession(connector=aiohttp.TCPConnector(ssl=ssl_ctx)) as sess:
+        last_valid_df = None
         while cur <= end_dt:
             got = None
             for days in chunk_sizes:
@@ -180,11 +182,25 @@ async def fetch_usdkrw_timeseries(start_date, end_date):
                 got = await fetch_chunk(sess, s, e)
                 if got is not None:
                     break
+            if isinstance(got, str) and got == "WEEKEND_FILL":
+                # ✅ 주말 구간이면 직전 평일 환율로 채움
+                weekend_dates = pd.date_range(start=cur, end=chunk_end)
+                # 직전 평일 환율 찾기
+                if last_valid_df is not None and not last_valid_df.empty:
+                    last_rate = last_valid_df["usdkrw"].iloc[-1]
+                else:
+                    last_rate = 1300.0  # 기본값
+                fill_df = pd.DataFrame({"date": weekend_dates, "usdkrw": [last_rate] * len(weekend_dates)})
+                frames.append(fill_df)
+                print(f"✅ 주말 구간 {cur}~{chunk_end}: 직전 평일 환율({last_rate})로 채움")
+                cur = chunk_end + timedelta(days=1)
+                continue
             if got is None:
                 print(f"⚠️ {cur}~ 구간 완전 실패, 하루 건너뜀")
                 cur += timedelta(days=1)
                 continue
             frames.append(got)
+            last_valid_df = got
             cur = got["date"].max().date() + timedelta(days=1)
             await asyncio.sleep(0.05)
 
@@ -194,6 +210,8 @@ async def fetch_usdkrw_timeseries(start_date, end_date):
 
     full = pd.concat(frames, ignore_index=True)
     full = full.drop_duplicates(subset="date").sort_values("date").reset_index(drop=True)
+    # ✅ 결측값 보정: 앞뒤 값으로 채움
+    full["usdkrw"] = full["usdkrw"].ffill().bfill()
     return full[["date", "usdkrw"]]
 
 
@@ -364,4 +382,3 @@ if __name__ == "__main__":
         print(f"💾 김프(Full) CSV 저장 완료: {len(df_kimchi_full)} rows")
 
     asyncio.run(main())
-
