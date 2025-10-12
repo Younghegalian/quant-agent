@@ -133,7 +133,7 @@ class RLAgent:
 
         # --- 현재 시장가격 ---
         price = float(state.get("price", 0.0))
-        avg_15m = np.mean(state["price_15m"])
+        avg_15m = np.mean(float(state.get("current_price")))
         reward = 0.0
 
         # =====================
@@ -302,13 +302,10 @@ class RLAgent:
         else:
             pnl_ratio = 0.0
 
-        state["pnl_ratio"] = pnl_ratio
-
         krw = float(state.get("krw_balance", 0.0))
         usdt = float(state.get("usdt_balance", 0.0))
         total = krw + usdt * price
         ratio = 0.0 if total <= 0 else (usdt * price) / total
-        pnl_ratio = float(state.get("pnl_ratio", 0.0))
         acc_vec = np.array([ratio, price, pnl_ratio], dtype=np.float32)[None, :]  # (1,3)
         acc = torch.tensor(acc_vec, dtype=torch.float32)
 

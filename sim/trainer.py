@@ -103,7 +103,7 @@ class Trainer:
                     "profit": curr_value-init_value,
                 })
 
-                # time.sleep(0.1)
+                # time.sleep(1)
 
             # === 에피소드 종료 ===
             final_value = self.env._portfolio_value()

@@ -35,7 +35,7 @@ class MultiHeadAttentionPooling(nn.Module):
 class PolicyNetwork(nn.Module):
     def __init__(
         self,
-        input_dim=1, hidden_dim=128, gru_layers=2, dropout=0.1,
+        hidden_dim=128, gru_layers=2, dropout=0.1,
         attention=True, action_dim=2, num_heads=2,
         dual_timescale=True,
         short_input_dim=1,
