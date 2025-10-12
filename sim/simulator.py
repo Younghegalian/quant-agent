@@ -118,9 +118,7 @@ class Simulator:
             order_price = None
 
         # --- 현재 스텝(t)의 시세 ---
-        ts_now = self.df_15m.index[self.step_idx]
         close_now = float(self._price(self.step_idx))
-        prev_value = self._portfolio_value()
 
         # --- 모델이 낸 오더 프라이스: 같은 스텝 close 기준 ±δ ---
         # (없으면 현재 close로 대체)
@@ -140,40 +138,19 @@ class Simulator:
             self.usdt = 0.0
         # HOLD는 패스
 
+        metrics = {
+            "price": close_now,
+            "krw_balance": self.krw,
+            "usdt_balance": self.usdt,
+        }
+
         # --- 다음 스텝으로 진행 ---
         self.step_idx += 1
         done = self.step_idx >= self.max_steps - 1
 
-        # --- reward는 다음봉 기준으로 계산 ---
-        if done:
-            reward = 0.0
-            post_value = self._portfolio_value()
-            delta_value = 0.0
-        else:
-            next_price = float(self._price(self.step_idx))
-            post_value = self.krw + self.usdt * next_price
-            delta_value = (post_value - prev_value) / max(prev_value, 1e-8)
-            reward = np.tanh(delta_value * 5.0)
-
         # --- 상태 업데이트 ---
         next_state = self._state()
 
-        # --- reward 계산 후 metrics 구성 ---
-        next_price = float(self._price(self.step_idx))  # 다음 스텝 close
-
-        metrics = {
-            "ts_now": ts_now,
-            "close_now": close_now,  # 현재 스텝의 close
-            "price": next_price,  # ✅ 다음 스텝 close (reward용)
-            "action": action_str,
-            "order_price": trade_price,
-            "value_prev": prev_value,
-            "value_now": post_value,
-            "delta_value": delta_value,
-            "reward": reward,
-            "krw_balance": self.krw,
-            "usdt_balance": self.usdt,
-        }
         return next_state, metrics, done
 
     def _portfolio_value(self):

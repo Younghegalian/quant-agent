@@ -30,10 +30,11 @@ def dummy_execute_action(action_str: str, state: Dict[str, Any], order_price: fl
         order_price = state.get("current_price", 0.0)
 
     # 가상 체결 로직
-    price = float(order_price)
-    fee = random.uniform(0.0004, 0.0006)
-    filled = True
-    return {"price": price, "fee": fee, "filled": filled}
+
+
+    return {"krw_balance": random.uniform(900_000, 1_000_000),
+            "usdt_balance": random.uniform(0, 10),
+            "current_price": random.uniform(1360, 1375),}
 
 
 def run_live(
@@ -46,9 +47,7 @@ def run_live(
     실전(온라인) 루프. 리워드는 반드시 agent 내부에서 계산한다.
     """
     step = 0
-    update_interval = cfg["training"].get("update_interval", 64)
     sleep_sec = cfg.get("live", {}).get("refresh_interval", 5)
-
     save_every = cfg.get("live", {}).get("save_interval_updates", 0)
     save_prefix = cfg.get("live", {}).get("save_prefix", "live_model")
     update_count = 0
@@ -66,9 +65,7 @@ def run_live(
             order_price = act_out["order_price"]
 
             # 3) 행동 집행(체결) → metrics 획득
-            metrics = execute_action(action_str, state, order_price=order_price)
-
-            time.sleep(sleep_sec)
+            metrics = execute_action(action_str, state, order_price)
 
             # 4) 자산 상태 반영
             price = float(state.get("current_price", 0.0))
@@ -81,10 +78,13 @@ def run_live(
             # 5) 보상 계산
             reward = agent.compute_reward(metrics, action_str)
 
-            # 6) 버퍼 저장
+            # 6) 딜레이
+            time.sleep(sleep_sec)
+
+            # 7) 버퍼 저장
             agent.store_transition(state, action_str, reward, None, False)
 
-            # 7) 로그 출력
+            # 8) 로그 출력
             val_now = krw + usdt * price
             order_str = f"{order_price:.2f}" if order_price is not None else "None"
             now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -97,7 +97,7 @@ def run_live(
                 f"value={val_now:.2f} | reward={reward:.6f}"
             )
 
-            # 8) 일정 step마다 PPO 학습
+            # 9) 일정 step마다 PPO 학습
             if agent.ready_to_learn():
                 loss = agent.learn()
                 if loss is not None:

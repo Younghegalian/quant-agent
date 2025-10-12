@@ -3,7 +3,6 @@ import time
 import torch
 import torch.nn.functional as F
 import numpy as np
-import math
 from .model import PolicyNetwork
 from .ppo_core import PPOCore
 from .memory import ReplayBuffer, Transition
@@ -71,9 +70,9 @@ class RLAgent:
             probs = F.softmax(logits, dim=-1)
             action_idx = (torch.argmax if self.eval_mode else torch.multinomial)(probs, 1).item()
 
-        price = float(state.get("current_price", 1.0))
-        krw = float(state.get("krw_balance", 0.0))
-        usdt = float(state.get("usdt_balance", 0.0))
+        price = float(state.get("current_price"))
+        krw = float(state.get("krw_balance"))
+        usdt = float(state.get("usdt_balance"))
         total = krw + usdt * price
         ratio = 0.0 if total <= 0 else (usdt * price) / total
         th = self.cfg.get("policy", {}).get("signal_sell_threshold", 0.10)
@@ -85,7 +84,7 @@ class RLAgent:
         if action_idx == 1:
             if ratio >= th and usdt > 0:
                 interpreted = "SELL"
-                order_price = max(price - 1.0, 0.0)  # ✅ 매도는 1원 낮게
+                order_price = max(price - 1.0, 1200.0)  # ✅ 매도는 1원 낮게
             elif krw > 0:
                 interpreted = "BUY"
                 order_price = price + 1.0  # ✅ 매수는 1원 높게
@@ -93,7 +92,7 @@ class RLAgent:
         return {"action": interpreted, "order_price": order_price}
 
     # -------- reward ----------
-    def compute_reward(self, metrics: dict, action=None) -> float:
+    def compute_reward(self, state: dict, action=None) -> float:
         """
         강화학습용 트레이딩 리워드 함수 (개선 버전)
         -------------------------------------------------
@@ -116,9 +115,11 @@ class RLAgent:
             action_str, order_price = None, None
 
         # --- 설정값 ---
-        scale = self.cfg.get("policy", {}).get("reward_scale", 5.0)
+        scale = self.cfg.get("policy", {}).get("reward_scale", 1.0)
         λ = self.cfg.get("policy", {}).get("hold_penalty_lambda", 0.001)
-        fee = self.cfg.get("market", {}).get("fee_rate", 0.0005)
+        fee = self.cfg.get("sim", {}).get("fee_rate", 0.0005)
+        hp = self.cfg.get("policy", {}).get("hold_penalty", 0.02)
+        pr = self.cfg.get("policy", {}).get("profit_scale", 0.1)
 
         # --- 내부 상태 초기화 ---
         if not hasattr(self, "position_open"):
@@ -131,29 +132,31 @@ class RLAgent:
             self.prev_action = None
 
         # --- 현재 시장가격 ---
-        price = float(metrics.get("price", 0.0))
+        price = float(state.get("price", 0.0))
+        avg_15m = np.mean(state["price_15m"])
         reward = 0.0
 
         # =====================
         #  BUY (진입)
         # =====================
-        if action_str == "BUY" and not self.position_open:
+        if action_str == "BUY":
             self.position_open = True
-            self.entry_price = order_price or price
+            self.entry_price = order_price
             self.hold_count = 0
-            reward = 0.0
+            low_price = (avg_15m - order_price) / max(avg_15m, 1e-8)
+            reward = pr * torch.tanh(torch.tensor(low_price * 10.0)).item()
 
         # =====================
         #  SELL (청산)
         # =====================
-        elif action_str == "SELL" and self.position_open:
-            exit_price = order_price or price
+        elif action_str == "SELL":
+            exit_price = order_price
 
             # 수수료 반영 실현 손익률
             profit_ratio = ((exit_price * (1 - fee)) - (self.entry_price * (1 + fee))) / max(self.entry_price, 1e-8)
 
             # Tanh 스케일링 + global scale
-            reward = torch.tanh(torch.tensor(profit_ratio * 10.0)).item() * scale
+            reward = pr * torch.tanh(torch.tensor(profit_ratio * 50.0)).item()
 
             # 포지션 종료
             self.position_open = False
@@ -167,11 +170,11 @@ class RLAgent:
             self.hold_count += 1
 
             # 평가손익 기반 부분 리워드 (unrealized)
-            unrealized_ratio = (price - self.entry_price) / max(self.entry_price, 1e-8)
-            reward = 0.1 * torch.tanh(torch.tensor(unrealized_ratio * 5.0)).item() * scale
+            self.unrealized_ratio = (price - self.entry_price) / max(self.entry_price, 1e-8)
+            reward = pr * torch.tanh(torch.tensor(self.unrealized_ratio * 5.0)).item()
 
             # 포지션 유지 감쇠 (시간 패널티)
-            decay = min(λ * self.hold_count, 0.2)
+            decay = min(λ * self.hold_count, hp)
             reward -= decay
 
         # =====================
@@ -179,14 +182,9 @@ class RLAgent:
         # =====================
         elif action_str == "HOLD" and not self.position_open:
             self.hold_count += 1
-            decay = min(λ * self.hold_count, 0.02)
+            decay = min(λ * self.hold_count, hp)
             reward = -decay
 
-        # =====================
-        #  잘못된 중복 진입/청산 (BUY인데 이미 open, SELL인데 close)
-        # =====================
-        elif (action_str == "BUY" and self.position_open) or (action_str == "SELL" and not self.position_open):
-            reward = -0.001  # 경미한 패널티
 
         # =====================
         #  반전 패널티
@@ -196,7 +194,7 @@ class RLAgent:
         ) or (
                 self.prev_action == "SELL" and action_str == "BUY"
         ):
-            reward -= 0.05 # 포지션 반전 시 약한 패널티 (과도한 flip 방지)
+            reward -= 0.08 # 포지션 반전 시 약한 패널티 (과도한 flip 방지)
 
         # --- 상태 업데이트 ---
         self.prev_action = action_str
@@ -207,7 +205,8 @@ class RLAgent:
         return float(reward)
 
     # -------- experience ----------
-    def store_transition(self, state, action_str, reward, next_state, done, aux=None):
+    def store_transition(self, state, action, reward, next_state, done, aux=None):
+        action_str = action.get("action")
         self.buffer.append(Transition(state, action_str, reward, next_state, done, aux))
         self.global_steps += 1
 
@@ -237,7 +236,7 @@ class RLAgent:
         # 2) 텐서 스택
         states_s = torch.stack(states_s).to(self.device)  # (B, Ts, Fs)
         states_l = torch.stack(states_l).to(self.device)  # (B, Tl, Fl)
-        states_acc = torch.stack(states_acc).to(self.device)  # (B, 2)
+        states_acc = torch.stack(states_acc).to(self.device)  # (B, 3)
         actions = torch.tensor(actions_idx, dtype=torch.long, device=self.device).unsqueeze(-1)  # (B,1)
         rewards = torch.tensor(rewards, dtype=torch.float32, device=self.device)  # (B,1)
         dones = torch.tensor(dones, dtype=torch.float32, device=self.device)  # (B,1)
@@ -298,12 +297,12 @@ class RLAgent:
         # --- Account: ratio + current_price ---
         price = float(state.get("current_price", 0.0))
 
-        if hasattr(self, "position_open") and self.position_open and hasattr(self, "entry_price") and self.entry_price:
-            pnl_ratio = (price - self.entry_price) / max(self.entry_price, 1e-8)
+        if hasattr(self, "unrealized_ratio") and self.unrealized_ratio:
+            pnl_ratio = self.unrealized_ratio
         else:
             pnl_ratio = 0.0
-        pnl_norm = np.clip(pnl_ratio * 100.0, -5.0, 5.0) / 5.0
-        state["pnl_ratio"] = pnl_norm
+
+        state["pnl_ratio"] = pnl_ratio
 
         krw = float(state.get("krw_balance", 0.0))
         usdt = float(state.get("usdt_balance", 0.0))

@@ -16,72 +16,57 @@ class Trainer:
         self.agent = agent
         self.env = Simulator(cfg, price_15m=price_15m, price_1d=price_1d)
         self.cfg = cfg
-        self.history = []
-        self.step_records = []  # <== 모든 스텝 누적 기록용
+        self.history = []  # <== 모든 스텝 누적 기록용
 
         # 로그 디렉토리 준비
         os.makedirs(cfg["training"]["save_dir"], exist_ok=True)
-        self.episode_log_path = os.path.join(cfg["training"]["save_dir"], "train_log.csv")
-        self.step_log_path = os.path.join(cfg["training"]["save_dir"], "train_log_steps.csv")
+        self.episode_log_path = save_path(cfg["training"]["save_dir"],f"train_summary_{ts()}.csv")
+        self.step_log_dir = cfg["training"]["save_dir"]
 
-    def train(self, episodes=1, eval_mode=False):
-        total_steps = 0
+    def train(self, episodes, eval_mode=False):
 
         for ep in range(episodes):
+            self.step_records = []
             start = time.time()
             state = self.env.reset()
             done = False
             ep_reward = 0.0
             ep_step_counter = 0
             init_value = self.env._portfolio_value()
+            prev_value = self.env._portfolio_value()
 
             while not done:
                 # === 1) 행동 결정 ===
                 action = self.agent.act(state)
 
-                # === 2) 현재 상태 ===
-                ts_now = self.env.df_15m.index[self.env.step_idx]
-                close_now = self.env._price(self.env.step_idx)
-                prev_value = self.env._portfolio_value()
-
                 # === 3) 환경 스텝 ===
                 next_state, metrics, done = self.env.step(action)
-
-                # === 4) 리워드 ===
-                reward = self.agent.compute_reward(metrics, action)
-                curr_value = metrics.get("value_now", self.env._portfolio_value())
+                curr_value = self.env._portfolio_value()
                 delta_value = curr_value - prev_value
-
-                # === 5) 버퍼 저장 ===
-                self.agent.store_transition(state, action, reward, next_state, done, aux=metrics)
-
-                # === 6) 업데이트 ===
-                state = next_state
-                ep_reward += reward
-                total_steps += 1
+                prev_value = curr_value
                 ep_step_counter += 1
 
-                # === 7) 학습 ===
+                # === 4) 리워드 ===
+                reward = self.agent.compute_reward(state, action)
+                ep_reward += reward
+
+                # === 5) 버퍼 저장 ===
+                self.agent.store_transition(state, action, reward, done, False)
+                state = next_state
+
+                # === 6) 주기 학습 ===
                 loss = None
                 if not eval_mode and self.agent.ready_to_learn():
                     loss = self.agent.learn()
 
-                # === 8) 액션 파싱 ===
-                if isinstance(action, dict):
-                    action_str = str(action.get("action"))
-                    order_price = action.get("order_price")
-                elif isinstance(action, (tuple, list)):
-                    action_str = str(action[0])
-                    order_price = action[1] if len(action) > 1 else None
-                else:
-                    action_str = str(action)
-                    order_price = None
+                # === 7) 상세 로그 ===
+                action_str = str(action.get("action"))
+                order_price = action.get("order_price")
 
-                # === 9) 상세 로그 ===
                 log_msg = (
-                    f"[{ts_now:%Y-%m-%d %H:%M}] step={total_steps:05d} | "
+                    f"[{self.env.df_15m.index[self.env.step_idx-1]:%Y-%m-%d %H:%M}] step={ep_step_counter:05d} | "
                     f"ep={ep+1:<2d} | "
-                    f"close={close_now:>10.2f} | "
+                    f"close={self.env._price(self.env.step_idx-1):>10.2f} | "
                     f"action={action_str:<5}"
                 )
                 if order_price is not None:
@@ -101,20 +86,21 @@ class Trainer:
 
                 # print(log_msg, flush=True)
 
-                # === 10) step 로그 저장 ===
+                # === 8) step 로그 저장 ===
                 self.step_records.append({
                     "episode": ep + 1,
-                    "step": total_steps,
-                    "timestamp": ts_now,
-                    "close": close_now,
-                    "action": action_str,
+                    "step": ep_step_counter,
+                    "timestamp": self.env.df_15m.index[self.env.step_idx-1],
+                    "close": self.env._price(self.env.step_idx-1),
                     "order_price": order_price,
+                    "action": action_str,
                     "reward": reward,
                     "delta_value": delta_value,
-                    "value": curr_value,
                     "krw": metrics["krw_balance"],
                     "usdt": metrics["usdt_balance"],
                     "loss": loss,
+                    "total_asset": curr_value,
+                    "profit": curr_value-init_value,
                 })
 
                 # time.sleep(0.1)
@@ -135,15 +121,20 @@ class Trainer:
 
             ckpt_path = save_path(
                 self.cfg["training"]["save_dir"],
-                f"final_ep{ep+1}_{ts()}.pt"
+                f"model_ep{ep+1}_{ts()}.pt"
             )
+
+            log_path = save_path(
+                self.cfg["training"]["save_dir"],
+                f"log_ep{ep+1}_{ts()}.csv"
+            )
+
             self.agent.save(ckpt_path)
+            pd.DataFrame(self.step_records).to_csv(log_path, index=False)
 
             end = time.time()
             print(f"time per episode: {end - start:.4f}s")
 
-        # === 전체 로그 저장 ===
+        # === 최종 로그 저장 ===
         pd.DataFrame(self.history).to_csv(self.episode_log_path, index=False)
-        pd.DataFrame(self.step_records).to_csv(self.step_log_path, index=False)
-        log(f"[SIM] All step logs saved to {self.step_log_path}")
         log(f"[SIM] Episode summary saved to {self.episode_log_path}")
