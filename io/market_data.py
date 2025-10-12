@@ -341,8 +341,8 @@ async def fetch_kimchi_daily(mode="agent", lookback=200, save_csv=False):
         "usdt_close": "upbit_usdt_krw",
     }, inplace=True)
     merged["kimchi_premium(%)"] = (
-        (merged["upbit_btc_krw"] - merged["binance_btc_usdt"] * merged["usdkrw"])
-        / (merged["binance_btc_usdt"] * merged["usdkrw"])
+        (merged["upbit_usdt_krw"] - merged["usdkrw"])
+        / merged["usdkrw"]
     ) * 100
 
     # ✅ 불필요한 중간 컬럼 정리

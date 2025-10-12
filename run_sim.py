@@ -12,7 +12,7 @@ if __name__ == "__main__":
     # ===== ② 실데이터 로드 =====
     # 15분봉
     df_15m = pd.read_csv(
-        "io/USDT_15m_20251010.csv",
+        "io/USDT_15m_20251012.csv",
         usecols=["timestamp_kst", "close"],
         parse_dates=["timestamp_kst"]
     )
@@ -23,7 +23,7 @@ if __name__ == "__main__":
 
     # 일봉
     df_1d = pd.read_csv(
-        "io/USDT_kimchi_days_20251010.csv",
+        "io/USDT_kimchi_days_20251012.csv",
         usecols=["timestamp_kst", "upbit_usdt_krw", "kimchi_premium(%)"],
         parse_dates=["timestamp_kst"]
     )
