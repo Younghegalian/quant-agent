@@ -174,12 +174,12 @@ class RLAgent:
             reward -= decay
 
         # =====================
-        #  HOLD (비포지션 상태)
+        #  HOLD (무포지션 상태)
         # =====================
         elif action_str == "HOLD" and not self.position_open:
             self.hold_count += 1
 
-            # 포지션 유지 감쇠 (시간 패널티)
+            # 무포지션 유지 감쇠 (시간 패널티)
             decay = min(λ * self.hold_count, hp) * ph
             reward -= decay
 
