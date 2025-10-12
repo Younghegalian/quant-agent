@@ -41,11 +41,11 @@ live:
 
 policy:
   signal_sell_threshold: 0.10  # usdt 비중 10% 이상이면 SELL 신호로 해석
-  reward_scale: 3             # Min/Max reward scale
-  profit_scale: 0.2           # 수익, 손실에 대한 reward coefficient
-  position_hold: 0.2          # 포지션 보유 패널티 감경
-  hold_penalty_lambda: 0.0005  # 포지션 유지 패널티 lambda
-  hold_penalty: 0.2           # 포지션 유지 패널티 max
+  reward_scale: 1             # Min/Max reward scale
+  profit_scale: 1             # 수익, 손실에 대한 reward coefficient
+  position_hold: 0.7          # 포지션 보유 패널티 감경
+  hold_penalty_lambda: 0.001  # 포지션 유지 패널티 lambda
+  hold_penalty: 0.5           # 포지션 유지 패널티 max
   fee_rate: 0.0001
 
 trading:
@@ -58,5 +58,5 @@ data:
 sim:
   max_steps: 1000
   fee: 0.0001
-  init_krw: 10000000
+  init_krw: 100000000
 

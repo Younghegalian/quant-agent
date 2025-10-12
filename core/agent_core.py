@@ -104,17 +104,8 @@ class RLAgent:
         """
 
         # --- 액션 파싱 ---
-        if isinstance(action, dict):
-            action_str = action.get("action", "").upper()
-            order_price = action.get("order_price")
-        elif isinstance(action, (tuple, list)):
-            action_str = str(action[0]).upper()
-            order_price = action[1] if len(action) > 1 else None
-        elif isinstance(action, str):
-            action_str = action.upper()
-            order_price = None
-        else:
-            action_str, order_price = None, None
+        action_str = action.get("action", "").upper()
+        order_price = action.get("order_price")
 
         # --- 설정값 ---
         scale = self.cfg.get("policy", {}).get("reward_scale", 1.0)
@@ -142,30 +133,34 @@ class RLAgent:
         #  BUY (진입)
         # =====================
         if action_str == "BUY":
+
+            # 낮은 가격 진입 bonus
+            low_price = (avg_15m - order_price) / max(avg_15m, 1e-8)
+            reward = pr * torch.tanh(torch.tensor(low_price * 40.0)).item()
+
             self.position_open = True
             self.entry_price = order_price
             self.hold_count = 0
-            low_price = (avg_15m - order_price) / max(avg_15m, 1e-8)
-            reward = pr * torch.tanh(torch.tensor(low_price * 20.0)).item()
 
         # =====================
         #  SELL (청산)
         # =====================
         elif action_str == "SELL":
+
             exit_price = order_price
 
             # 수수료 반영 실현 손익률
-            profit_ratio = (exit_price - self.entry_price) - fee / max(self.entry_price, 1e-8)
+            profit_ratio = ((exit_price - self.entry_price) - fee) / max(self.entry_price, 1e-8)
 
             # Tanh 스케일링 + global scale
-            reward = pr * torch.tanh(torch.tensor(profit_ratio * 50.0)).item()
+            reward = pr * torch.tanh(torch.tensor(profit_ratio * 100.0)).item()
 
             # 포지션 유지 감쇠 (시간 패널티)
             decay = min(λ * self.hold_count, hp)
             reward -= decay
 
-            # 포지션 종료
             self.position_open = False
+            self.hold_count += 0
 
         # =====================
         #  HOLD (포지션 유지)
@@ -174,8 +169,8 @@ class RLAgent:
             self.hold_count += 1
 
             # 평가손익 기반 부분 리워드 (unrealized)
-            self.unrealized_ratio = (price - self.entry_price) / max(self.entry_price, 1e-8)
-            reward = pr * torch.tanh(torch.tensor(self.unrealized_ratio * 1.0)).item()
+            self.unrealized_ratio = ((price - self.entry_price) - fee) / max(self.entry_price, 1e-8)
+            reward = pr * torch.tanh(torch.tensor(self.unrealized_ratio * 20.0)).item()
 
             # 포지션 유지 감쇠 (시간 패널티)
             decay = min(λ * self.hold_count, hp)
@@ -186,9 +181,9 @@ class RLAgent:
         # =====================
         elif action_str == "HOLD" and not self.position_open:
             self.hold_count += 1
-            decay = min(λ * self.hold_count, hp)
-            reward = -decay
 
+            decay = min(λ * self.hold_count, hp)
+            reward -= decay
 
         # =====================
         #  반전 패널티
@@ -307,6 +302,7 @@ class RLAgent:
             pnl_ratio = self.unrealized_ratio * 10
         else:
             pnl_ratio = 0.0
+
 
         krw = float(state.get("krw_balance", 0.0))
         usdt = float(state.get("usdt_balance", 0.0))

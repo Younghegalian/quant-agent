@@ -141,7 +141,7 @@ class Simulator:
         if action_str == "BUY" and self.krw > 0:
             qty = self.krw / trade_price
             self.usdt += qty * (1 - self.fee)
-            self.krw = 0.0
+            self.krw = self.krw - self.usdt * trade_price
         elif action_str == "SELL" and self.usdt > 0:
             krw_gain = self.usdt * trade_price * (1 - self.fee)
             self.krw += krw_gain
