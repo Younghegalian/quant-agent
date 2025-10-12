@@ -113,6 +113,7 @@ class RLAgent:
         fee = self.cfg.get("sim", {}).get("fee_rate", 0.0005)
         hp = self.cfg.get("policy", {}).get("hold_penalty", 0.02)
         pr = self.cfg.get("policy", {}).get("profit_scale", 0.1)
+        ph = self.cfg.get("policy", {}).get("position_hold", 0.7)
 
         # --- 내부 상태 초기화 ---
         if not hasattr(self, "position_open"):
@@ -168,10 +169,6 @@ class RLAgent:
         elif action_str == "HOLD" and self.position_open:
             self.hold_count += 1
 
-            # 평가손익 기반 부분 리워드 (unrealized)
-            self.unrealized_ratio = ((price - self.entry_price) - fee) / max(self.entry_price, 1e-8)
-            reward = pr * torch.tanh(torch.tensor(self.unrealized_ratio * 20.0)).item()
-
             # 포지션 유지 감쇠 (시간 패널티)
             decay = min(λ * self.hold_count, hp)
             reward -= decay
@@ -182,7 +179,8 @@ class RLAgent:
         elif action_str == "HOLD" and not self.position_open:
             self.hold_count += 1
 
-            decay = min(λ * self.hold_count, hp)
+            # 포지션 유지 감쇠 (시간 패널티)
+            decay = min(λ * self.hold_count, hp) * ph
             reward -= decay
 
         # =====================
