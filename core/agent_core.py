@@ -62,6 +62,8 @@ class RLAgent:
         HOLD일 경우 order_price=None 반환
         반환값: {'action': str, 'order_price': float or None}
         """
+        margin = self.cfg.get("trading", {}).get("slippage_margin")
+
         # ✅ 세 개 다 받기
         x_short, x_long, x_acc = self._preprocess_state(state)
 
@@ -84,10 +86,10 @@ class RLAgent:
         if action_idx == 1:
             if ratio >= th and usdt > 0:
                 interpreted = "SELL"
-                order_price = max(price - 1.0, 1200.0)  # ✅ 매도는 1원 낮게
+                order_price = max(price - margin, 1200.0)  # ✅ 매도는 1원 낮게
             elif krw > 0:
                 interpreted = "BUY"
-                order_price = price + 1.0  # ✅ 매수는 1원 높게
+                order_price = price + margin  # ✅ 매수는 1원 높게
 
         return {"action": interpreted, "order_price": order_price}
 
@@ -144,7 +146,7 @@ class RLAgent:
             self.entry_price = order_price
             self.hold_count = 0
             low_price = (avg_15m - order_price) / max(avg_15m, 1e-8)
-            reward = pr * torch.tanh(torch.tensor(low_price * 10.0)).item()
+            reward = pr * torch.tanh(torch.tensor(low_price * 20.0)).item()
 
         # =====================
         #  SELL (청산)
@@ -153,10 +155,14 @@ class RLAgent:
             exit_price = order_price
 
             # 수수료 반영 실현 손익률
-            profit_ratio = ((exit_price * (1 - fee)) - (self.entry_price * (1 + fee))) / max(self.entry_price, 1e-8)
+            profit_ratio = (exit_price - self.entry_price) - fee / max(self.entry_price, 1e-8)
 
             # Tanh 스케일링 + global scale
             reward = pr * torch.tanh(torch.tensor(profit_ratio * 50.0)).item()
+
+            # 포지션 유지 감쇠 (시간 패널티)
+            decay = min(λ * self.hold_count, hp)
+            reward -= decay
 
             # 포지션 종료
             self.position_open = False
@@ -169,7 +175,7 @@ class RLAgent:
 
             # 평가손익 기반 부분 리워드 (unrealized)
             self.unrealized_ratio = (price - self.entry_price) / max(self.entry_price, 1e-8)
-            reward = pr * torch.tanh(torch.tensor(self.unrealized_ratio * 5.0)).item()
+            reward = pr * torch.tanh(torch.tensor(self.unrealized_ratio * 1.0)).item()
 
             # 포지션 유지 감쇠 (시간 패널티)
             decay = min(λ * self.hold_count, hp)
@@ -274,29 +280,31 @@ class RLAgent:
         # -------- utils ----------
 
     def _preprocess_state(self, state: dict):
+        # --- Long: price_1d + kimchi_premium ---
+        p1d = np.array(state.get("price_1d", []), dtype=np.float32)
+        if p1d.size > 0:
+            p1d = (p1d - p1d.mean(axis=0, keepdims=True)) / (p1d.std(axis=0, keepdims=True) + 1e-8)
+        kp = np.array(state.get("kimchi_premium", []), dtype=np.float32)
+        if p1d.size > 0:
+            kp = (kp - kp.mean(axis=0, keepdims=True)) / (kp.std(axis=0, keepdims=True) + 1e-8)
+        xl_np = np.column_stack([p1d, kp])
+        xl = torch.tensor(xl_np, dtype=torch.float32).unsqueeze(0)
+
 
         # --- Short: price_15m ---
         s = np.array(state.get("price_15m", []), dtype=np.float32)
         if s.ndim == 1: s = s[:, None]
         if s.size > 0:
-            s = (s - s.mean(axis=0, keepdims=True)) / (s.std(axis=0, keepdims=True) + 1e-8)
+            s = (s - p1d.mean(axis=0, keepdims=True)) / (p1d.std(axis=0, keepdims=True) + 1e-8)
         xs = torch.tensor(s, dtype=torch.float32).unsqueeze(0)
 
-        # --- Long: price_1d + kimchi_premium ---
-        p1d = np.array(state.get("price_1d", []), dtype=np.float32)
-        kp = np.array(state.get("kimchi_premium", []), dtype=np.float32)
-        L = min(len(p1d), len(kp))
-        xl_np = np.column_stack([p1d[:L], kp[:L]]) if L > 0 else np.zeros((0, 2), np.float32)
-        if xl_np.size > 0:
-            xl_np = (xl_np - xl_np.mean(axis=0, keepdims=True)) / (xl_np.std(axis=0, keepdims=True) + 1e-8)
-        xl = torch.tensor(xl_np, dtype=torch.float32).unsqueeze(0)
 
-
-        # --- Account: ratio + current_price ---
+        # --- Account: ratio + current_price + PnL ---
         price = float(state.get("current_price", 0.0))
+        price_norm = float((price - p1d.mean(axis=0, keepdims=True)) / (p1d.std(axis=0, keepdims=True) + 1e-8))
 
         if hasattr(self, "unrealized_ratio") and self.unrealized_ratio:
-            pnl_ratio = self.unrealized_ratio
+            pnl_ratio = self.unrealized_ratio * 10
         else:
             pnl_ratio = 0.0
 
@@ -304,10 +312,8 @@ class RLAgent:
         usdt = float(state.get("usdt_balance", 0.0))
         total = krw + usdt * price
         ratio = 0.0 if total <= 0 else (usdt * price) / total
-        acc_vec = np.array([ratio, price, pnl_ratio], dtype=np.float32)[None, :]  # (1,3)
+        acc_vec = np.array([ratio, price_norm, pnl_ratio], dtype=np.float32)[None, :]  # (1,3)
         acc = torch.tensor(acc_vec, dtype=torch.float32)
-
-
 
         return to_device(xs, self.device), to_device(xl, self.device), to_device(acc, self.device)
 

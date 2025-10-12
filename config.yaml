@@ -23,7 +23,7 @@ training:
     entropy_coef: 0.05
     value_coef: 0.5
     update_epochs: 3
-    update_interval: 2048       # rollout
+    update_interval: 4096       # rollout
 
   # ---- Live (실전) ----
   live:
@@ -32,7 +32,7 @@ training:
     entropy_coef: 0.01
     value_coef: 0.4
     update_epochs: 1
-    update_interval: 1024       # rollout
+    update_interval: 2048       # rollout
 
 live:
   refresh_interval: 0.5         # loop delay (15분)
@@ -41,12 +41,15 @@ live:
 
 policy:
   signal_sell_threshold: 0.10  # usdt 비중 10% 이상이면 SELL 신호로 해석
-  reward_scale: 1             # Min/Max reward scale
-  profit_scale: 0.5           # 수익, 손실에 대한 reward coefficient
+  reward_scale: 3             # Min/Max reward scale
+  profit_scale: 0.2           # 수익, 손실에 대한 reward coefficient
   position_hold: 0.2          # 포지션 보유 패널티 감경
-  hold_penalty_lambda: 0.001  # 포지션 유지 패널티 lambda
+  hold_penalty_lambda: 0.0005  # 포지션 유지 패널티 lambda
   hold_penalty: 0.2           # 포지션 유지 패널티 max
   fee_rate: 0.0001
+
+trading:
+  slippage_margin: 1
 
 data:
   window_15m: 15   # 15분봉 시계열 길이
@@ -56,3 +59,4 @@ sim:
   max_steps: 1000
   fee: 0.0001
   init_krw: 10000000
+

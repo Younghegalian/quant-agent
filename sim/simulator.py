@@ -121,7 +121,6 @@ class Simulator:
         Executes one environment step.
         - 모델은 현재 스텝(t)의 close 기준으로 action 결정
         - order_price는 같은 스텝(t)의 close 기준 ±α (모델이 낸 값)
-        - reward는 다음 스텝(t+1) 가치 변화 기준
         """
         # --- 액션 파싱 ---
         if isinstance(action, dict):
@@ -134,11 +133,9 @@ class Simulator:
             action_str = str(action)
             order_price = None
 
-        # --- 현재 스텝(t)의 시세 ---
-        close_now = float(self._price(self.step_idx))
-
         # --- 모델이 낸 오더 프라이스: 같은 스텝 close 기준 ±δ ---
-        trade_price = float(order_price)
+        if action_str != "HOLD":
+            trade_price = float(order_price)
 
         # --- 거래 수행 (현재 스텝에서 체결됨) ---
         if action_str == "BUY" and self.krw > 0:

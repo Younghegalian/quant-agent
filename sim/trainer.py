@@ -3,7 +3,6 @@ from core.utils import log, save_path, ts
 import pandas as pd
 import os
 import time
-import numpy as np
 
 class Trainer:
     """
@@ -103,7 +102,7 @@ class Trainer:
                     "profit": curr_value-init_value,
                 })
 
-                # time.sleep(1)
+                # time.sleep(20)
 
             # === 에피소드 종료 ===
             final_value = self.env._portfolio_value()
