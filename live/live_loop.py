@@ -60,9 +60,9 @@ def run_live(
             state = get_live_state()
 
             # 2) 행동 결정 (가격 포함)
-            act_out = agent.act(state)  # {"action": "BUY"/"SELL"/"HOLD", "order_price": float}
-            action_str = act_out["action"]
-            order_price = act_out["order_price"]
+            action = agent.act(state)  # {"action": "BUY"/"SELL"/"HOLD", "order_price": float}
+            action_str = action["action"]
+            order_price = action["order_price"]
 
             # 3) 행동 집행(체결) → metrics 획득
             metrics = execute_action(action_str, state, order_price)
@@ -71,18 +71,15 @@ def run_live(
             price = float(state.get("current_price", 0.0))
             krw = float(state.get("krw_balance", 0.0))
             usdt = float(state.get("usdt_balance", 0.0))
-            metrics["krw_balance"] = krw
-            metrics["usdt_balance"] = usdt
-            metrics["price"] = price
 
             # 5) 보상 계산
-            reward = agent.compute_reward(metrics, action_str)
+            reward = agent.compute_reward(state, action)
 
             # 6) 딜레이
             time.sleep(sleep_sec)
 
             # 7) 버퍼 저장
-            agent.store_transition(state, action_str, reward, None, False)
+            agent.store_transition(state, action, reward, None)
 
             # 8) 로그 출력
             val_now = krw + usdt * price

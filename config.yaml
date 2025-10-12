@@ -4,7 +4,7 @@ model:
   hidden_dim: 128
   gru_layers: 2
   dropout: 0.1
-  attention: true
+  attention: True
   action_dim: 2
 
 ppo:

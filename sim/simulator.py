@@ -138,11 +138,7 @@ class Simulator:
         close_now = float(self._price(self.step_idx))
 
         # --- 모델이 낸 오더 프라이스: 같은 스텝 close 기준 ±δ ---
-        # (없으면 현재 close로 대체)
-        if order_price is None or not isinstance(order_price, (int, float)) or np.isnan(order_price):
-            trade_price = close_now
-        else:
-            trade_price = float(order_price)
+        trade_price = float(order_price)
 
         # --- 거래 수행 (현재 스텝에서 체결됨) ---
         if action_str == "BUY" and self.krw > 0:
@@ -156,7 +152,6 @@ class Simulator:
         # HOLD는 패스
 
         metrics = {
-            "price": close_now,
             "krw_balance": self.krw,
             "usdt_balance": self.usdt,
         }

@@ -132,8 +132,8 @@ class RLAgent:
             self.prev_action = None
 
         # --- 현재 시장가격 ---
-        price = float(state.get("price", 0.0))
-        avg_15m = np.mean(float(state.get("current_price")))
+        price = float(state.get("current_price", 0.0))
+        avg_15m = np.mean(state.get("price_15m"))
         reward = 0.0
 
         # =====================
@@ -160,8 +160,6 @@ class RLAgent:
 
             # 포지션 종료
             self.position_open = False
-            self.entry_price = None
-            self.hold_count = 0
 
         # =====================
         #  HOLD (포지션 유지)
@@ -205,9 +203,9 @@ class RLAgent:
         return float(reward)
 
     # -------- experience ----------
-    def store_transition(self, state, action, reward, next_state, done, aux=None):
+    def store_transition(self, state, action, reward, done):
         action_str = action.get("action")
-        self.buffer.append(Transition(state, action_str, reward, next_state, done, aux))
+        self.buffer.append(Transition(state, action_str, reward, done))
         self.global_steps += 1
 
     def ready_to_learn(self) -> bool:

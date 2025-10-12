@@ -1,7 +1,7 @@
 from collections import deque, namedtuple
 import random
 
-Transition = namedtuple("Transition", "state action reward next_state done aux")
+Transition = namedtuple("Transition", "state action reward done")
 
 class ReplayBuffer:
     def __init__(self, maxlen=10000):

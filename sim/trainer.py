@@ -51,7 +51,7 @@ class Trainer:
                 ep_reward += reward
 
                 # === 5) 버퍼 저장 ===
-                self.agent.store_transition(state, action, reward, done, False)
+                self.agent.store_transition(state, action, reward, done)
                 state = next_state
 
                 # === 6) 주기 학습 ===
