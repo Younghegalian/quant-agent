@@ -18,7 +18,7 @@ class PPOCore:
     # ------------------------------------------------------------
     def compute_loss(self, logits, old_logits, actions, advantages, values, returns):
         """
-        PPO 손실 계산
+        PPO 손실 계산 + KL 감시
         logits, old_logits: (B, num_actions)
         actions: (B,1)
         advantages, values, returns: (B,1)
@@ -36,25 +36,29 @@ class PPOCore:
         # ratio 계산 (log 확률 차이 → exp)
         ratio = torch.exp(act_new_logp - act_old_logp)
 
-        # PPO objective
+        # Clipped surrogate objective
         surr1 = ratio * advantages
         surr2 = torch.clamp(ratio, 1.0 - self.clip_epsilon, 1.0 + self.clip_epsilon) * advantages
         policy_loss = -torch.min(surr1, surr2).mean()
 
-        # value loss (critic)
+        # Value (critic) loss
         value_loss = F.mse_loss(values, returns)
 
-        # entropy (policy entropy는 양수여야 함)
+        # Entropy bonus (탐색성 유지)
         probs = torch.exp(new_logp)
         entropy = -(probs * new_logp).sum(dim=1).mean()
 
-        # total loss
-        probs_new = F.softmax(logits, dim=-1)
-        probs_old = F.softmax(old_logits, dim=-1)
-        kl = (probs_old * (torch.log(probs_old + 1e-8) - torch.log(probs_new + 1e-8))).sum(dim=1).mean()
-        loss = policy_loss + self.value_coef * value_loss - self.entropy_coef * entropy + 0.5 * kl
+        # Approximate KL divergence (새/이전 정책 거리)
+        with torch.no_grad():
+            probs_new = F.softmax(logits, dim=-1)
+            probs_old = F.softmax(old_logits, dim=-1)
+            kl = (probs_old * (torch.log(probs_old + 1e-8) - torch.log(probs_new + 1e-8))).sum(dim=1).mean()
 
-        return loss
+        # 총 손실
+        loss = policy_loss + self.value_coef * value_loss - self.entropy_coef * entropy
+
+        # 💡 KL 반환
+        return loss, kl
 
     # ------------------------------------------------------------
     def step(self, loss):

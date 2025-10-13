@@ -45,6 +45,7 @@ class RLAgent:
         self.gamma = config["ppo"]["gamma"]
         self.update_interval = train_cfg["update_interval"]
         self.save_dir = config["training"]["save_dir"]
+        self.kl_stop = config["training"]["target_kl"]
         os.makedirs(self.save_dir, exist_ok=True)
 
         # 버퍼 및 상태 초기화
@@ -64,7 +65,6 @@ class RLAgent:
         """
         margin = self.cfg.get("trading", {}).get("slippage_margin")
 
-        # ✅ 세 개 다 받기
         x_short, x_long, x_acc = self._preprocess_state(state)
 
         with torch.no_grad():
@@ -99,7 +99,6 @@ class RLAgent:
         강화학습용 트레이딩 리워드 함수 (개선 버전)
         -------------------------------------------------
         - Entry–Exit 실현수익률 기반 + 거래수수료 반영
-        - HOLD 중 평가손익(unrealized PnL) 소폭 반영
         - 포지션 유지 시간 감쇠 및 반전 패널티 적용
         """
 
@@ -126,7 +125,6 @@ class RLAgent:
             self.prev_action = None
 
         # --- 현재 시장가격 ---
-        price = float(state.get("current_price", 0.0))
         avg_15m = np.mean(state.get("price_15m"))
         reward = 0.0
 
@@ -238,6 +236,9 @@ class RLAgent:
         rewards = torch.tensor(rewards, dtype=torch.float32, device=self.device)  # (B,1)
         dones = torch.tensor(dones, dtype=torch.float32, device=self.device)  # (B,1)
 
+        # reward normalization
+        rewards = (rewards - rewards.mean()) / (rewards.std() + 1e-8)
+
         # 3) old logits/values (첫 pass)
         with torch.no_grad():
             old_logits, values = self.model((states_s, states_l, states_acc))
@@ -249,14 +250,16 @@ class RLAgent:
             G = r + self.gamma * G * (1 - d)
             returns.insert(0, G)
         returns = torch.stack(returns).squeeze(1).detach()  # (B,)
+
         advantages = (returns - values.squeeze(1)).detach()
         advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+        advantages = torch.clamp(advantages, -5.0, 5.0)
 
         # 5) new forward
         logits, new_values = self.model((states_s, states_l, states_acc))  # ✅ acc 추가 반영
 
         # 6) PPO loss 계산 및 업데이트
-        loss = self.ppo.compute_loss(
+        loss, kl = self.ppo.compute_loss(
             logits=logits,
             old_logits=old_logits,
             actions=actions,
@@ -264,6 +267,13 @@ class RLAgent:
             values=new_values,
             returns=returns.unsqueeze(-1)  # (B,1)
         )
+
+        # ✅ KL-based local early stop
+        target_kl = getattr(self, "kl_stop", 0.02)  # 없으면 0.02 기본값
+        if kl > target_kl:
+            print(f"⚠️ KL {kl:.4f} > {target_kl}, early stop update skipped")
+            self.buffer.clear()
+            return float(loss.item())
 
         self.ppo.step(loss)
         self.buffer.clear()

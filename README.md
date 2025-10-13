@@ -1,10 +1,10 @@
-# **USDT-RL: Online Reinforcement Learning Engine for K-Premia**
+# **USDT-RL: Online Reinforcement Learning Engine**
 
 > 해당 프로젝트는 **Python 3.11** 기반의 **Online Reinforcement Learning (RL)** 에이전트 엔진으로,  
 > 김치프리미엄(K-Premia) 및 환율 변동을 이용한 **USDT–KRW 단타 전략**을  
 > 실시간으로 학습하고 적응하도록 설계되었습니다.  
 >  
-> 거래 환경(Environment, K-Premia 모듈)으로부터 상태(state)를 주기적으로 입력받아,  
+> 거래 환경으로부터 상태(state)를 주기적으로 입력받아,  
 > GRU + Attention 기반의 정책 신경망을 통해 행동(action)을 산출하고,  
 > 그 결과를 실시간 보상(reward)으로 반영하여 지속적으로 업데이트합니다.  
 >  
