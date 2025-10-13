@@ -67,14 +67,36 @@ class PolicyNetwork(nn.Module):
         )
         self.attn_l = MultiHeadAttentionPooling(hidden_dim, num_heads) if attention else None
 
+        # acc preprocess
+        self.acc_proj = nn.Sequential(
+            nn.LayerNorm(account_dim),
+            nn.Linear(account_dim, hidden_dim // 2),
+            nn.GELU()
+        )
+
         # --- fuse ---
+        self.fuse_prep_norm = nn.LayerNorm(hidden_dim * 2 + hidden_dim // 2)
+
         self.fuse = nn.Sequential(
-            nn.Linear(hidden_dim * 2 + account_dim, hidden_dim),
-            nn.ReLU(),
+            nn.Linear(hidden_dim * 2 + hidden_dim // 2, hidden_dim),
+            nn.GELU(),
             nn.Dropout(dropout)
         )
-        self.policy_head = nn.Linear(hidden_dim, action_dim)
-        self.value_head  = nn.Linear(hidden_dim, 1)
+
+        # actor / critic 분기 (얕은 분리로 간섭 완화)
+        self.actor_head = nn.Sequential(
+            nn.LayerNorm(hidden_dim),
+            nn.Linear(hidden_dim, hidden_dim//2),
+            nn.GELU()
+        )
+        self.critic_head = nn.Sequential(
+            nn.LayerNorm(hidden_dim),
+            nn.Linear(hidden_dim, hidden_dim//2),
+            nn.GELU()
+        )
+
+        self.policy_head = nn.Linear(hidden_dim // 2, action_dim)
+        self.value_head = nn.Linear(hidden_dim // 2, 1)
 
         torch.nn.init.orthogonal_(self.policy_head.weight, gain=0.01)
         torch.nn.init.constant_(self.policy_head.bias, 0.0)
@@ -90,9 +112,13 @@ class PolicyNetwork(nn.Module):
         h_s = self.attn_s(out_s) if self.attn_s else out_s[:, -1, :]
         h_l = self.attn_l(out_l) if self.attn_l else out_l[:, -1, :]
 
-        # 계좌상태(acc)는 (B,2) 형태니까 바로 concat
-        h = torch.cat([h_s, h_l, x_acc], dim=-1)
-        z = self.fuse(h)
-        z = torch.tanh(z)
+        h_acc = self.acc_proj(x_acc)          # (B, H/2)
 
-        return self.policy_head(z), self.value_head(z)
+        h_cat = torch.cat([h_s, h_l, h_acc], dim=-1)
+        h_cat = self.fuse_prep_norm(h_cat)
+
+        z = self.fuse(h_cat)
+        z_pi = self.actor_head(z)
+        z_v = self.critic_head(z)
+
+        return self.policy_head(z_pi), self.value_head(z_v)
