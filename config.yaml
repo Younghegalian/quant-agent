@@ -44,13 +44,12 @@ policy:
   signal_sell_threshold: 0.10  # usdt 비중 10% 이상이면 SELL 신호로 해석
   reward_scale: 1             # Min/Max reward scale
   profit_scale: 1             # 수익, 손실에 대한 reward coefficient
-  position_hold: 0.7          # 무포지션 보유 패널티 감경
-  hold_penalty_lambda: 0.001  # 포지션 유지 패널티 lambda
+  hold_penalty_lambda: 0.0001  # 포지션 유지 패널티 lambda
   hold_penalty: 0.5           # 포지션 유지 패널티 max
-  fee_rate: 0.0001
+  fee_rate: 0.0000
 
 trading:
-  slippage_margin: 1
+  slippage_margin: 0
 
 data:
   window_15m: 15   # 15분봉 시계열 길이
@@ -58,6 +57,6 @@ data:
 
 sim:
   max_steps: 1000
-  fee: 0.0001
+  fee: 0.0000
   init_krw: 100000000
 

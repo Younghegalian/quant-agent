@@ -112,7 +112,6 @@ class RLAgent:
         fee = self.cfg.get("sim", {}).get("fee_rate", 0.0005)
         hp = self.cfg.get("policy", {}).get("hold_penalty", 0.02)
         pr = self.cfg.get("policy", {}).get("profit_scale", 0.1)
-        ph = self.cfg.get("policy", {}).get("position_hold", 0.7)
 
         # --- 내부 상태 초기화 ---
         if not hasattr(self, "position_open"):
@@ -123,19 +122,38 @@ class RLAgent:
             self.hold_count = 0
         if not hasattr(self, "prev_action"):
             self.prev_action = None
+        if not hasattr(self, "position_init"):
+            self.position_init = True
 
-        # --- 현재 시장가격 ---
-        avg_15m = np.mean(state.get("price_15m"))
+
         reward = 0.0
+
+        # =====================
+        #  BUY (진입) init
+        # =====================
+        if action_str == "BUY" and self.position_init:
+
+            # always assume the first signal is a buy, because the initial asset state is assumed to be held in KRW
+
+            reward = 0
+
+            self.position_open = True
+            self.entry_price = order_price
+            self.hold_count = 0
+            self.position_init = False
 
         # =====================
         #  BUY (진입)
         # =====================
-        if action_str == "BUY":
+        elif action_str == "BUY" and not self.position_init:
 
-            # 낮은 가격 진입 bonus
-            low_price = (avg_15m - order_price) / max(avg_15m, 1e-8)
-            reward = pr * torch.tanh(torch.tensor(low_price * 40.0)).item()
+            entry_price = order_price
+
+            # 수수료 반영 실현 손익률
+            profit_ratio = ((self.exit_price - entry_price) - fee) / max(self.exit_price, 1e-8)
+
+            # Tanh 스케일링 + global scale
+            reward = pr * torch.tanh(torch.tensor(profit_ratio * 100.0)).item()
 
             self.position_open = True
             self.entry_price = order_price
@@ -159,40 +177,18 @@ class RLAgent:
             reward -= decay
 
             self.position_open = False
-            self.hold_count += 0
+            self.exit_price = exit_price
+            self.hold_count = 0
 
         # =====================
-        #  HOLD (포지션 유지)
+        #  HOLD
         # =====================
-        elif action_str == "HOLD" and self.position_open:
+        else:
             self.hold_count += 1
 
             # 포지션 유지 감쇠 (시간 패널티)
             decay = min(λ * self.hold_count, hp)
             reward -= decay
-
-        # =====================
-        #  HOLD (무포지션 상태)
-        # =====================
-        elif action_str == "HOLD" and not self.position_open:
-            self.hold_count += 1
-
-            # 무포지션 유지 감쇠 (시간 패널티)
-            decay = min(λ * self.hold_count, hp) * ph
-            reward -= decay
-
-        # =====================
-        #  반전 패널티
-        # =====================
-        if (
-                self.prev_action == "BUY" and action_str == "SELL"
-        ) or (
-                self.prev_action == "SELL" and action_str == "BUY"
-        ):
-            reward -= 0.08 # 포지션 반전 시 약한 패널티 (과도한 flip 방지)
-
-        # --- 상태 업데이트 ---
-        self.prev_action = action_str
 
         # --- Reward clipping ---
         reward = np.clip(reward, -scale, scale)
